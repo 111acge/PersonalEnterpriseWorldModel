@@ -1,0 +1,24 @@
+entity_type: constant
+storage_path: 30-Instances/constants/
+required_frontmatter:
+  - key
+  - value
+  - unit
+  - context
+  - confidence
+  - source
+  - updated_at
+content_template: |
+  # {{ key }}
+
+  > 值：`{{ value }} {{ unit }}`
+  > 置信度：{{ confidence }} | 来源：{{ source }} | 更新于：{{ updated_at }}
+
+  ## 上下文
+
+  {{ context }}
+
+  ## 关联流程
+
+  {{ related_processes | default('待补充') }}
+auto_merge: true

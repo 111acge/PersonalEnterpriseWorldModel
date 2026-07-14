@@ -1,0 +1,63 @@
+rules:
+  - id: extract_term
+    description: 提取术语、别名、定义
+    trigger_patterns:
+      - "我们叫"
+      - "叫"
+      - "术语"
+      - "定义为"
+      - "指的是"
+      - "简称"
+      - "别名"
+      - "又称"
+    target_layer: 20-Ontology/dictionary/
+    priority: high
+
+  - id: extract_constant
+    description: 提取数值常量、阈值、超时
+    trigger_patterns:
+      - "\\d+\\s*(分钟|小时|天|%)"
+      - "阈值"
+      - "上限"
+      - "下限"
+      - "超时"
+      - "重试"
+      - "枚举"
+    target_layer: 30-Instances/constants/
+    priority: high
+
+  - id: extract_case
+    description: 提取故障、事故、复盘案例
+    trigger_patterns:
+      - "故障"
+      - "事故"
+      - "P0"
+      - "P1"
+      - "复盘"
+      - "踩坑"
+      - "项目总结"
+    target_layer: 30-Instances/cases/
+    priority: medium
+
+  - id: extract_process
+    description: 提取流程、审批、操作步骤
+    trigger_patterns:
+      - "流程"
+      - "审批"
+      - "先.*然后.*最后"
+      - "必须"
+      - "步骤"
+    target_layer: 20-Ontology/processes/
+    priority: medium
+
+  - id: extract_system
+    description: 提取系统、平台、服务、模块
+    trigger_patterns:
+      - "系统"
+      - "平台"
+      - "服务"
+      - "模块"
+      - "数据库"
+      - "API"
+    target_layer: 20-Ontology/systems/
+    priority: low

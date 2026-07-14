@@ -1,0 +1,23 @@
+entity_type: term
+storage_path: 20-Ontology/dictionary/
+required_frontmatter:
+  - term
+  - aliases
+  - definition
+  - confidence
+  - source
+  - updated_at
+content_template: |
+  # {{ term }}
+
+  > 别名：{{ aliases | join(', ') }}
+  > 置信度：{{ confidence }} | 来源：{{ source }} | 更新于：{{ updated_at }}
+
+  ## 定义
+
+  {{ definition }}
+
+  ## 相关概念
+
+  {{ related | default('待补充') }}
+auto_merge: true

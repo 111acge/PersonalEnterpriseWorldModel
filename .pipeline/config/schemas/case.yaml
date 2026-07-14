@@ -1,0 +1,32 @@
+entity_type: case
+storage_path: 30-Instances/cases/
+required_frontmatter:
+  - case_id
+  - title
+  - severity
+  - occurred_at
+  - confidence
+  - source
+  - updated_at
+content_template: |
+  # {{ title }}
+
+  > 编号：{{ case_id }} | 严重级别：{{ severity }}
+  > 发生时间：{{ occurred_at }} | 置信度：{{ confidence }} | 来源：{{ source }}
+
+  ## 现象
+
+  {{ phenomenon }}
+
+  ## 根因
+
+  {{ root_cause | default('待补充') }}
+
+  ## 处理过程
+
+  {{ handling_process | default('待补充') }}
+
+  ## 复盘与沉淀
+
+  {{ lessons | default('待补充') }}
+auto_merge: false

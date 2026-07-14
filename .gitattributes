@@ -1,0 +1,2 @@
+bge-model/pytorch_model.bin filter=lfs diff=lfs merge=lfs -text
+bge-model/**/*.bin filter=lfs diff=lfs merge=lfs -text

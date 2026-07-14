@@ -1,0 +1,38 @@
+merge_policy:
+  # 常量数值：新值覆盖旧值，Git 保留历史
+  - field: value
+    entity_types:
+      - constant
+    strategy: overwrite
+
+  # 定义：追加新视角，标记冲突
+  - field: definition
+    entity_types:
+      - term
+      - system
+      - process
+    strategy: append
+
+  # 同义词 / 别名：合并去重
+  - field: aliases
+    entity_types:
+      - term
+      - system
+    strategy: union
+
+  # 置信度：取最高值
+  - field: confidence
+    entity_types:
+      - term
+      - constant
+      - case
+      - process
+      - system
+      - skill
+    strategy: max
+
+  # 通用字段：默认追加
+  - field: "*"
+    entity_types:
+      - "*"
+    strategy: append

@@ -1,0 +1,23 @@
+entity_type: skill
+storage_path: 40-Skills/
+required_frontmatter:
+  - skill_id
+  - name
+  - trigger
+  - confidence
+  - source
+  - updated_at
+content_template: |
+  # {{ name }}
+
+  > 编号：{{ skill_id }} | 触发场景：{{ trigger }}
+  > 置信度：{{ confidence }} | 来源：{{ source }} | 更新于：{{ updated_at }}
+
+  ## 提示词 / 检查清单
+
+  {{ prompt_or_checklist }}
+
+  ## 示例
+
+  {{ examples | default('待补充') }}
+auto_merge: true

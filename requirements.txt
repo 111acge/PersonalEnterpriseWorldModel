@@ -1,0 +1,22 @@
+# 核心依赖
+pyyaml>=6.0
+numpy>=1.24.0
+requests>=2.28.0
+
+# LLM API 客户端（DeepSeek/Kimi/MiniMax 均走 OpenAI 兼容接口）
+openai>=1.0.0
+
+# 语义向量检索（强烈推荐，首次运行自动下载 bge-small-zh 模型 ~100MB）
+# 如未安装则回退到字符 n-gram TF-IDF（精度下降但可运行）
+sentence-transformers>=2.2.0
+
+# Git 自动提交（可选）
+gitpython>=3.1.0
+
+# 打包成可执行文件（可选）
+pyinstaller>=6.0
+
+# OCR 图片文字识别（可选，首次运行自动下载模型 ~150MB）
+# 如需 OCR，请手动执行：pip install paddlepaddle paddleocr
+# paddlepaddle>=2.5.0
+# paddleocr>=2.7.0

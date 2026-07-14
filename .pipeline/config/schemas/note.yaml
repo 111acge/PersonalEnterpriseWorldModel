@@ -1,0 +1,20 @@
+entity_type: note
+storage_path: 10-Theory/notes/
+required_frontmatter:
+  - title
+  - source
+  - confidence
+  - updated_at
+content_template: |
+  # {{ title }}
+
+  > 来源：{{ source }} | 置信度：{{ confidence }} | 更新于：{{ updated_at }}
+
+  ## 内容
+
+  {{ content }}
+
+  ## 关键词
+
+  {{ keywords | default('待补充') }}
+auto_merge: false

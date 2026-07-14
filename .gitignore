@@ -1,0 +1,72 @@
+# ===== 本地数据（运行时生成，可重建）=====
+data/
+.vector/
+
+# ===== PyInstaller 打包产物 =====
+build/
+dist/
+*.spec
+!build.spec
+*.manifest
+*.spec.bak
+
+# ===== 环境变量与敏感文件 =====
+.env
+*.pem
+*.key
+credentials.json
+
+# ===== Python 编译与缓存 =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.eggs/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ===== 测试与类型检查缓存 =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# ===== IDE 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ===== 日志 =====
+*.log
+.pipeline/pipeline.log
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+ENV/
+env/
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+
+# ===== 备注 =====
+# bge-model/ 是内置的语义向量模型（约 92MB），打包时必须保留，不要加入 gitignore
+# 如果你用 git lfs 管理大文件，建议单独配置 lfs 追踪 bge-model/pytorch_model.bin

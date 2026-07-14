@@ -1,0 +1,27 @@
+entity_type: system
+storage_path: 20-Ontology/systems/
+required_frontmatter:
+  - name
+  - aliases
+  - type
+  - confidence
+  - source
+  - updated_at
+content_template: |
+  # {{ name }}
+
+  > 类型：{{ type }} | 别名：{{ aliases | join(', ') }}
+  > 置信度：{{ confidence }} | 来源：{{ source }} | 更新于：{{ updated_at }}
+
+  ## 职责
+
+  {{ responsibility }}
+
+  ## 依赖
+
+  {{ dependencies | default('待补充') }}
+
+  ## 关键接口
+
+  {{ interfaces | default('待补充') }}
+auto_merge: true
