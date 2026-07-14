@@ -1,12 +1,8 @@
 """SQLite 全文索引 + 向量索引管理。"""
 from typing import Dict, List
 
-try:
-    from .database import add_document
-    from .vector_db import VectorDB
-except ImportError:
-    from database import add_document
-    from vector_db import VectorDB
+from pewm.processors.database import add_document, db_connection
+from pewm.processors.vector_db import VectorDB
 
 
 def extract_title(content: str) -> str:
@@ -53,17 +49,10 @@ def index_documents(documents: List[Dict], build_vector: bool = True) -> None:
 
 def rebuild_vector() -> None:
     """重建全部向量索引（强制重新计算所有向量）。"""
-    try:
-        from .database import get_connection  # type: ignore
-    except ImportError:
-        from database import get_connection  # type: ignore
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         rows = conn.execute(
             "SELECT entity_type, content, path FROM documents"
         ).fetchall()
-    finally:
-        conn.close()
     vdb = VectorDB()
     vdb.docs = []
     vdb.vectors = None

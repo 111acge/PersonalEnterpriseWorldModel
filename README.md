@@ -250,7 +250,7 @@ flowchart LR
 
 ```
 personal-word-onto/
-├── .pipeline/                    # AI 管线（核心代码）
+├── pewm/                         # AI 管线（核心代码）
 │   ├── config/
 │   │   ├── schemas/              # 7 个实体 schema（yaml）
 │   │   ├── extraction-rules.yaml # 关键词触发规则
@@ -391,7 +391,7 @@ git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 pus
 
 ### Q8. 想自定义提取规则？
 
-**A**：编辑 `.pipeline/config/extraction-rules.yaml`（关键词触发）和 `.pipeline/config/schemas/*.yaml`（实体字段模板）。改完下次跑管线生效。
+**A**：编辑 `pewm/config/extraction-rules.yaml`（关键词触发）和 `pewm/config/schemas/*.yaml`（实体字段模板）。改完下次跑管线生效。
 
 ---
 

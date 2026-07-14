@@ -22,7 +22,7 @@ a = Analysis(
         ('30-Instances', '30-Instances'),
         ('40-Skills', '40-Skills'),
         ('90-Meta', '90-Meta'),
-        ('.pipeline', '.pipeline'),
+        ('pewm', 'pewm'),
         ('.env.example', '.'),
         ('requirements.txt', '.'),
         ('bge-model', 'bge-model'),
@@ -34,7 +34,7 @@ a = Analysis(
         'tkinter.ttk',
         'tkinter.scrolledtext',
         'tkinter.filedialog',
-        # 内部模块
+        # 内部模块（旧 sys.path 入口，保留兼容）
         'database',
         'extractor',
         'vectorizer',
@@ -50,12 +50,20 @@ a = Analysis(
         'prompt_config',
         'progress_dialog',
         'config_manager',
+        # 新 GUI 包
+        'pewm.gui',
+        'pewm.gui.styles',
+        'pewm.gui.tabs',
+        'pewm.gui.app',
+        'pewm.processors.retrieval',
+        'pewm.processors.merge',
         # 外部依赖
         'openai',
         'numpy',
         'requests',
         'httpx',
         'httpcore',
+        'pydantic',
         # 语义向量（可选，若未安装则自动回退 TF-IDF）
         'sentence_transformers',
         'transformers',

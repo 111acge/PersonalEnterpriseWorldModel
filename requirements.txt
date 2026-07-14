@@ -2,6 +2,7 @@
 pyyaml>=6.0
 numpy>=1.24.0
 requests>=2.28.0
+pydantic>=2.0.0
 
 # LLM API 客户端（DeepSeek/Kimi/MiniMax 均走 OpenAI 兼容接口）
 openai>=1.0.0

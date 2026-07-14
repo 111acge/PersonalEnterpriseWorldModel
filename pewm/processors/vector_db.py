@@ -17,10 +17,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-try:
-    from .utils import ROOT
-except ImportError:
-    from utils import ROOT
+from pewm.paths import ROOT
 
 VECTOR_DIR = ROOT / "data" / "vector"
 INDEX_FILE = VECTOR_DIR / "index.pkl"

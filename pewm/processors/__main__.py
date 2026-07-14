@@ -4,30 +4,16 @@ import subprocess
 from pathlib import Path
 from typing import Dict
 
-try:
-    from .utils import (
-        ROOT,
-        INBOX_DIR,
-        list_inbox_files,
-        is_unprocessed,
-        read_text,
-        write_text,
-    )
-    from .extractor import extract_entities, load_schemas
-    from .vectorizer import index_documents
-    from .database import init_db, mark_inbox_processed, load_processed, get_stats
-except ImportError:
-    from utils import (
-        ROOT,
-        INBOX_DIR,
-        list_inbox_files,
-        is_unprocessed,
-        read_text,
-        write_text,
-    )
-    from extractor import extract_entities, load_schemas
-    from vectorizer import index_documents
-    from database import init_db, mark_inbox_processed, load_processed, get_stats
+from pewm.paths import ROOT, INBOX_DIR
+from pewm.processors.utils import (
+    list_inbox_files,
+    is_unprocessed,
+    read_text,
+    write_text,
+)
+from pewm.processors.extractor import extract_entities, load_schemas
+from pewm.processors.vectorizer import index_documents
+from pewm.processors.database import init_db, mark_inbox_processed, load_processed, get_stats
 
 
 def reconcile() -> Dict[str, int]:
@@ -39,14 +25,9 @@ def reconcile() -> Dict[str, int]:
 
     返回 {"database": N, "vector": M}，分别表示 FTS5 和向量库被软删除的数量。
     """
-    try:
-        from .database import list_documents, soft_delete_document
-        from .vector_db import VectorDB
-        from .utils import ROOT
-    except ImportError:
-        from database import list_documents, soft_delete_document
-        from vector_db import VectorDB
-        from utils import ROOT
+    from pewm.paths import ROOT
+    from pewm.processors.database import list_documents, soft_delete_document
+    from pewm.processors.vector_db import VectorDB
 
     def _path_still_exists(stored_path: str) -> bool:
         """判断存储的路径在当前环境下是否还存在。
@@ -108,12 +89,8 @@ def purge_orphans() -> Dict[str, int]:
 
     返回 {"database": N, "vector": M}。
     """
-    try:
-        from .database import list_documents, hard_delete_document
-        from .vector_db import VectorDB
-    except ImportError:
-        from database import list_documents, hard_delete_document
-        from vector_db import VectorDB
+    from pewm.processors.database import list_documents, hard_delete_document
+    from pewm.processors.vector_db import VectorDB
 
     docs = list_documents(include_deleted=True, limit=100000)
     db_count = 0
@@ -139,15 +116,8 @@ def _try_ocr(inbox_path: Path, text: str) -> str:
     - mode=api: 直接调用云端 API，不需要本地 PaddleOCR
     - mode=local: 调用本地 PaddleOCR，未安装时静默跳过
     """
-    try:
-        from .ocr import ocr_for_inbox_file, is_local_available
-        from .ocr_api import load_ocr_config
-    except ImportError:
-        try:
-            from ocr import ocr_for_inbox_file, is_local_available
-            from ocr_api import load_ocr_config
-        except ImportError:
-            return text
+    from pewm.processors.ocr import ocr_for_inbox_file, is_local_available
+    from pewm.processors.ocr_api import load_ocr_config
     try:
         cfg = load_ocr_config()
         mode = cfg.get("mode", "local")
@@ -171,10 +141,7 @@ def run_pipeline(
     print(f"[info] 启动 AI 管线：{ROOT}")
     # 立即初始化数据库，确保 data/ 目录和表始终被创建
     init_db()
-    try:
-        from .database import DATA_DIR
-    except ImportError:
-        from database import DATA_DIR
+    from pewm.paths import DATA_DIR
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     schemas = load_schemas()
@@ -264,13 +231,7 @@ def show_status():
 
     # 向量库状态
     vec_status = "未构建"
-    try:
-        from .vector_db import VectorDB
-    except ImportError:
-        try:
-            from vector_db import VectorDB
-        except ImportError:
-            VectorDB = None
+    from pewm.processors.vector_db import VectorDB
     if VectorDB is not None:
         try:
             vs = VectorDB().stats()
@@ -302,7 +263,7 @@ def main():
     if args.status:
         show_status()
     elif args.rebuild_vector:
-        from .vectorizer import rebuild_vector  # type: ignore
+        from pewm.processors.vectorizer import rebuild_vector  # type: ignore
         rebuild_vector()
     elif args.reconcile:
         result = reconcile()

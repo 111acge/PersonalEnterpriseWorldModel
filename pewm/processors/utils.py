@@ -3,9 +3,8 @@ import re
 from pathlib import Path
 from typing import List
 
-ROOT = Path(__file__).resolve().parents[2]
-INBOX_DIR = ROOT / "00-Inbox"
-DATA_DIR = ROOT / "data"
+from pewm.paths import ROOT, INBOX_DIR, DATA_DIR
+from pewm.processors.database import is_inbox_processed
 
 
 def list_inbox_files() -> List[Path]:
@@ -20,11 +19,6 @@ def list_inbox_files() -> List[Path]:
 
 def is_unprocessed(path: Path) -> bool:
     """检查文件是否尚未处理或已被修改。"""
-    try:
-        from .database import is_inbox_processed
-    except ImportError:
-        from database import is_inbox_processed
-
     rel = str(path.relative_to(ROOT))
     mtime = str(path.stat().st_mtime)
     return not is_inbox_processed(rel, mtime)

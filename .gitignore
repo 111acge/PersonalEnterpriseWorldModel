@@ -56,7 +56,7 @@ ehthumbs.db
 
 # ===== 日志 =====
 *.log
-.pipeline/pipeline.log
+pewm/pipeline.log
 
 # ===== 虚拟环境 =====
 .venv/

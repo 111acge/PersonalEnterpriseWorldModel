@@ -18,10 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-try:
-    from .llm_client import CONFIG_DIR, load_config, save_config
-except ImportError:
-    from llm_client import CONFIG_DIR, load_config, save_config
+from pewm.processors.llm_client import CONFIG_DIR, load_config, save_config
 
 
 # 每家提供商的配置模板

@@ -1,40 +1,73 @@
-"""SQLite 数据层：替代 processed.json 与 ChromaDB 向量索引。
+"""SQLite 数据层。
 
 所有数据保存在项目根目录的 data/world-model.db 中。
 """
 import sqlite3
-import sys
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
-def _resolve_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[2]
+from pewm.paths import ROOT, DATA_DIR, DB_PATH
 
 
-ROOT = _resolve_root()
-DATA_DIR = ROOT / "data"
-DB_PATH = DATA_DIR / "world-model.db"
+_thread_local = threading.local()
 
 
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def get_connection() -> sqlite3.Connection:
+@contextmanager
+def db_connection():
+    """线程安全的 SQLite 连接上下文管理器。
+
+    同一线程内复用同一连接，避免频繁 open/close；不同线程各自拥有连接。
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+    conn = getattr(_thread_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        _thread_local.conn = conn
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def close_connection() -> None:
+    """显式关闭当前线程的数据库连接。"""
+    conn = getattr(_thread_local, "conn", None)
+    if conn is not None:
+        conn.close()
+        _thread_local.conn = None
+
+
+def _to_rel(path: str) -> str:
+    """存储时优先使用相对路径，便于项目迁移。"""
+    p = Path(path)
+    if p.is_absolute():
+        try:
+            return str(p.relative_to(ROOT))
+        except ValueError:
+            pass
+    return path
+
+
+def _to_abs(path: str) -> Path:
+    """读取时把相对路径转回绝对路径。"""
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    return ROOT / p
 
 
 def init_db() -> None:
     """初始化数据库表和 FTS5 索引。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS inbox (
                 path TEXT PRIMARY KEY,
@@ -58,7 +91,7 @@ def init_db() -> None:
         try:
             conn.execute("ALTER TABLE documents ADD COLUMN deleted_at TEXT DEFAULT ''")
         except sqlite3.OperationalError:
-            pass  # 字段已存在
+            pass
         # FTS5 全文索引
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS fts_documents USING fts5(
@@ -89,26 +122,20 @@ def init_db() -> None:
             END
         """)
         conn.commit()
-    finally:
-        conn.close()
 
 
 def is_inbox_processed(path: str, mtime: str) -> bool:
     """检查 Inbox 文件是否已处理且未修改。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         row = conn.execute(
-            "SELECT mtime FROM inbox WHERE path = ?", (path,)
+            "SELECT mtime FROM inbox WHERE path = ?", (_to_rel(path),)
         ).fetchone()
         return row is not None and row["mtime"] == mtime
-    finally:
-        conn.close()
 
 
 def mark_inbox_processed(path: str, mtime: str) -> None:
     """标记 Inbox 文件已处理。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         conn.execute(
             """
             INSERT INTO inbox (path, mtime, processed_at)
@@ -117,27 +144,21 @@ def mark_inbox_processed(path: str, mtime: str) -> None:
                 mtime = excluded.mtime,
                 processed_at = excluded.processed_at
             """,
-            (path, mtime, now_iso()),
+            (_to_rel(path), mtime, now_iso()),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def load_processed() -> Dict[str, str]:
     """返回 {path: mtime} 映射。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         rows = conn.execute("SELECT path, mtime FROM inbox").fetchall()
         return {row["path"]: row["mtime"] for row in rows}
-    finally:
-        conn.close()
 
 
 def add_document(entity_type: str, title: str, content: str, source: str, path: str) -> None:
     """添加或更新知识文档。更新时自动把 deleted_at 置空（恢复为未删除状态）。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         conn.execute(
             """
             INSERT INTO documents (entity_type, title, content, source, path, updated_at, deleted_at)
@@ -150,24 +171,17 @@ def add_document(entity_type: str, title: str, content: str, source: str, path: 
                 updated_at = excluded.updated_at,
                 deleted_at = ''
             """,
-            (entity_type, title, content, source, path, now_iso()),
+            (entity_type, title, content, _to_rel(source), _to_rel(path), now_iso()),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def soft_delete_document(path: str) -> bool:
-    """软删除：标记 deleted_at 为当前时间，从 FTS 索引中移除，但保留原文档。
-
-    返回 True 表示确实有文档被标记；如果已是软删除状态则返回 False（避免重复发 FTS delete）。
-    """
-    conn = get_connection()
-    try:
-        # 只处理 deleted_at 为空的记录，避免重复向 FTS 发 delete 命令
+    """软删除：标记 deleted_at 为当前时间，从 FTS 索引中移除，但保留原文档。"""
+    with db_connection() as conn:
         row = conn.execute(
             "SELECT id FROM documents WHERE path = ? AND (deleted_at IS NULL OR deleted_at = '')",
-            (path,),
+            (_to_rel(path),),
         ).fetchone()
         if not row:
             return False
@@ -176,7 +190,6 @@ def soft_delete_document(path: str) -> bool:
             "UPDATE documents SET deleted_at = ? WHERE id = ?",
             (ts, row["id"]),
         )
-        # 手动从 FTS 索引中移除（DELETE 触发器不会在 UPDATE 时触发）
         conn.execute(
             "INSERT INTO fts_documents(fts_documents, rowid, title, content) "
             "SELECT 'delete', id, title, content FROM documents WHERE id = ?",
@@ -184,17 +197,14 @@ def soft_delete_document(path: str) -> bool:
         )
         conn.commit()
         return True
-    finally:
-        conn.close()
 
 
 def restore_document(path: str) -> bool:
     """恢复软删除的文档：把 deleted_at 置空，重新加入 FTS 索引。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         row = conn.execute(
             "SELECT id, title, content FROM documents WHERE path = ? AND deleted_at != ''",
-            (path,),
+            (_to_rel(path),),
         ).fetchone()
         if not row:
             return False
@@ -208,34 +218,25 @@ def restore_document(path: str) -> bool:
         )
         conn.commit()
         return True
-    finally:
-        conn.close()
 
 
 def hard_delete_document(path: str) -> bool:
     """硬删除：永久抹掉记录。DELETE 触发器会自动从 FTS 索引中移除。"""
-    conn = get_connection()
-    try:
-        cur = conn.execute("DELETE FROM documents WHERE path = ?", (path,))
+    with db_connection() as conn:
+        cur = conn.execute("DELETE FROM documents WHERE path = ?", (_to_rel(path),))
         conn.commit()
         return cur.rowcount > 0
-    finally:
-        conn.close()
 
 
 def list_documents(include_deleted: bool = False,
                    entity_type: str = None,
                    limit: int = 1000) -> List[Dict]:
     """列出所有文档（默认只返回未删除的）。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         where = []
         params = []
         if not include_deleted:
             where.append("(deleted_at IS NULL OR deleted_at = '')")
-        else:
-            # 返回所有（含已删除）
-            pass
         if entity_type:
             where.append("entity_type = ?")
             params.append(entity_type)
@@ -246,22 +247,17 @@ def list_documents(include_deleted: bool = False,
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
-    finally:
-        conn.close()
 
 
 def get_document(path: str) -> Optional[Dict]:
     """按 path 精确获取单篇文档（含已删除的）。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         row = conn.execute(
             "SELECT id, entity_type, title, content, source, path, updated_at, deleted_at "
             "FROM documents WHERE path = ?",
-            (path,),
+            (_to_rel(path),),
         ).fetchone()
         return dict(row) if row else None
-    finally:
-        conn.close()
 
 
 def search_documents(query: str, entity_type: Optional[str] = None,
@@ -270,7 +266,6 @@ def search_documents(query: str, entity_type: Optional[str] = None,
     like_results = _search_like(query, entity_type, limit)
     like_ids = {r["id"] for r in like_results}
 
-    # 再尝试 FTS5 补充结果
     try:
         safe_query = " ".join(query.split())
         if safe_query:
@@ -287,16 +282,13 @@ def search_documents(query: str, entity_type: Optional[str] = None,
             sql += " LIMIT ?"
             params.append(limit)
 
-            conn = get_connection()
-            try:
+            with db_connection() as conn:
                 rows = conn.execute(sql, params).fetchall()
                 for row in rows:
                     row_dict = dict(row)
                     if row_dict["id"] not in like_ids:
                         like_results.append(row_dict)
                         like_ids.add(row_dict["id"])
-            finally:
-                conn.close()
     except sqlite3.OperationalError:
         pass
 
@@ -304,18 +296,14 @@ def search_documents(query: str, entity_type: Optional[str] = None,
 
 
 def _search_like(query: str, entity_type: Optional[str], limit: int) -> List[Dict]:
-    conn = get_connection()
-    try:
-        # 收集搜索词：空格分词 + 整句 + 2-gram
+    with db_connection() as conn:
         search_terms = set()
         parts = [t.strip() for t in query.split() if len(t.strip()) >= 2]
         for part in parts:
             search_terms.add(part)
-        # 整句也加入
         clean_query = query.replace(" ", "").strip()
         if len(clean_query) >= 2:
             search_terms.add(clean_query)
-        # 2-gram 覆盖中文短词
         for part in list(search_terms):
             if len(part) >= 3:
                 for i in range(len(part) - 1):
@@ -325,7 +313,6 @@ def _search_like(query: str, entity_type: Optional[str], limit: int) -> List[Dic
         if not search_terms:
             return []
 
-        # OR 语义：匹配任意一个词即返回
         where_clauses = []
         params = []
         for term in search_terms:
@@ -344,15 +331,12 @@ def _search_like(query: str, entity_type: Optional[str], limit: int) -> List[Dic
         params.append(limit)
 
         rows = conn.execute(sql, params).fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
+        return [dict(r) for r in rows]
 
 
 def get_stats() -> Dict:
     """返回数据库统计信息（区分未删除/已删除文档）。"""
-    conn = get_connection()
-    try:
+    with db_connection() as conn:
         inbox_total = conn.execute("SELECT COUNT(*) AS c FROM inbox").fetchone()["c"]
         doc_count = conn.execute(
             "SELECT COUNT(*) AS c FROM documents WHERE deleted_at IS NULL OR deleted_at = ''"
@@ -366,5 +350,3 @@ def get_stats() -> Dict:
             "deleted_count": deleted_count,
             "db_path": str(DB_PATH),
         }
-    finally:
-        conn.close()

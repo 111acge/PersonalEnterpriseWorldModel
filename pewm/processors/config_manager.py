@@ -17,14 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-try:
-    from .llm_client import CONFIG_DIR, load_config, save_config
-    from .user_profile import load_profile, save_profile, PROFILE_FILE
-    from .prompt_config import load_prompt, save_prompt, PROMPT_FILE
-except ImportError:
-    from llm_client import CONFIG_DIR, load_config, save_config
-    from user_profile import load_profile, save_profile, PROFILE_FILE
-    from prompt_config import load_prompt, save_prompt, PROMPT_FILE
+from pewm.processors.llm_client import CONFIG_DIR, load_config, save_config
+from pewm.processors.user_profile import load_profile, save_profile, PROFILE_FILE
+from pewm.processors.prompt_config import load_prompt, save_prompt, PROMPT_FILE
 
 
 EXPORT_VERSION = 1

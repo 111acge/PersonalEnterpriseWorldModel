@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""语义检索入口（FTS5 + 向量混合检索）。"""
+"""语义检索入口（FTS5 + 向量混合检索，RRF 重排序）。"""
 import argparse
 import sys
 from pathlib import Path
 
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".pipeline" / "processors"))
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "pewm" / "processors"))
 
-from database import init_db, search_documents
-from vector_db import VectorDB
+from pewm.processors.database import init_db
+from pewm.processors.retrieval import hybrid_search
 
 
 def format_result(row: dict, index: int) -> str:
     preview = row.get("content", "").replace("\n", " ")[:200]
-    score = row.get("score")
-    score_str = f" [score: {score:.2f}]" if score is not None else ""
+    score = row.get("rrf_score")
+    score_str = f" [rrf: {score:.4f}]" if score is not None else ""
     src = row.get("source", "fts5")
     return (
         f"{index}. [{src}]{score_str} {row.get('path', '')}\n"
@@ -27,33 +28,7 @@ def search(query: str, layer: str = None, entity_type: str = None,
     """混合检索接口，返回结果列表。"""
     init_db()
     etype = entity_type or layer
-    seen = set()
-    results = []
-
-    # 1. FTS5 关键词检索
-    try:
-        for r in search_documents(query, entity_type=etype, limit=top_k):
-            p = r.get("path")
-            if p and p not in seen:
-                r["source"] = "fts5"
-                results.append(r)
-                seen.add(p)
-    except Exception as e:
-        print(f"[search] FTS5 失败: {e}")
-
-    # 2. 向量语义检索
-    try:
-        vdb = VectorDB()
-        for r in vdb.search(query, entity_type=etype, top_k=top_k):
-            p = r.get("path")
-            if p and p not in seen:
-                r["source"] = "vector"
-                results.append(r)
-                seen.add(p)
-    except Exception as e:
-        print(f"[search] 向量检索失败: {e}")
-
-    return results[:top_k]
+    return hybrid_search(query, entity_type=etype, top_k=top_k)
 
 
 def main():

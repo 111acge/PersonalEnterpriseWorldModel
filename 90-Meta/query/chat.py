@@ -5,10 +5,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".pipeline" / "processors"))
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "pewm" / "processors"))
 
-from database import init_db
-from rag import rag_answer
+from pewm.processors.database import init_db
+from pewm.processors.rag import rag_answer
 
 
 def chat(query: str, layer: str = None, entity_type: str = None,

@@ -28,7 +28,7 @@ enterprise-world-model/
 │   └── vector/
 │       ├── index.pkl
 │       └── embedding_model/  # 首次运行自动下载
-├── .pipeline/             # AI 处理管线配置与代码
+├── pewm/                  # AI 处理管线配置与代码
 │   ├── config/
 │   │   ├── schemas/       # 各层级数据 Schema（AI 的提取宪法）
 │   │   ├── extraction-rules.yaml
@@ -201,7 +201,7 @@ python3 build.py
 
 ### 提取触发规则
 
-管线通过 `.pipeline/config/extraction-rules.yaml` 控制提取行为。默认规则：
+管线通过 `pewm/config/extraction-rules.yaml` 控制提取行为。默认规则：
 
 | 规则 ID | 触发关键词/模式 | 目标层级 | 优先级 |
 |---------|----------------|---------|--------|

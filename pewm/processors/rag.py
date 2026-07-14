@@ -1,84 +1,73 @@
-"""RAG 问答管道：混合检索 + LLM 生成。
+"""RAG 问答管道：混合检索 + RRF 重排序 + LLM 生成。
 
 支持用户身份注入和自定义提示词。
 """
 from typing import Dict, List, Optional
 
-try:
-    from .database import search_documents
-    from .vector_db import VectorDB
-    from .llm_client import chat_completion, load_config
-    from .user_profile import load_profile, profile_to_context
-    from .prompt_config import load_prompt, render_system_prompt, get_no_result_reply
-except ImportError:
-    from database import search_documents
-    from vector_db import VectorDB
-    from llm_client import chat_completion, load_config
-    from user_profile import load_profile, profile_to_context
-    from prompt_config import load_prompt, render_system_prompt, get_no_result_reply
+from pewm.processors.retrieval import hybrid_search
+from pewm.processors.llm_client import chat_completion, load_config
+from pewm.processors.user_profile import load_profile, profile_to_context
+from pewm.processors.prompt_config import render_system_prompt, get_no_result_reply
+
+
+# RAG 上下文总预算（按字符估算，中文约 1.5 字符/token）
+DEFAULT_CONTEXT_BUDGET = 6000
 
 
 def _collect_context(
     query: str,
     entity_type: Optional[str] = None,
-    fts_k: int = 5,
-    vec_k: int = 5,
+    top_k: int = 5,
 ) -> List[Dict]:
-    """混合检索：FTS5 + 向量，去重合并。"""
-    seen_paths = set()
-    results = []
-
-    # 1. FTS5 关键词检索
+    """使用 RRF 融合的混合检索收集上下文。"""
     try:
-        fts_hits = search_documents(query, entity_type=entity_type, limit=fts_k)
-        for r in fts_hits:
-            path = r.get("path", "")
-            if path and path not in seen_paths:
-                seen_paths.add(path)
-                results.append({
-                    "path": path,
-                    "content": r.get("content", ""),
-                    "source": "fts5",
-                })
+        return hybrid_search(query, entity_type=entity_type, top_k=top_k, vec_k=top_k * 2)
     except Exception as e:
-        print(f"[rag] FTS5 检索失败: {e}")
-
-    # 2. 向量语义检索
-    try:
-        vdb = VectorDB()
-        vec_hits = vdb.search(query, entity_type=entity_type, top_k=vec_k)
-        for r in vec_hits:
-            path = r.get("path", "")
-            if path and path not in seen_paths:
-                seen_paths.add(path)
-                results.append({
-                    "path": path,
-                    "content": r.get("content", ""),
-                    "source": "vector",
-                    "score": r.get("score", 0.0),
-                })
-    except Exception as e:
-        print(f"[rag] 向量检索失败: {e}")
-
-    return results
+        print(f"[rag] 混合检索失败: {e}")
+        return []
 
 
-def _build_messages(query: str, context: List[Dict]) -> List[Dict]:
+def _allocate_context_budget(results: List[Dict], total_budget: int) -> List[Dict]:
+    """按 RRF 得分为每个结果分配上下文长度预算。"""
+    if not results:
+        return []
+
+    total_score = sum(max(r.get("rrf_score", 0), 0.01) for r in results)
+    min_chunk = 300
+    max_chunk = 1500
+
+    allocated = []
+    remaining = total_budget
+    for r in results:
+        score = max(r.get("rrf_score", 0.01), 0.01)
+        share = score / total_score
+        budget = int(total_budget * share)
+        budget = max(min_chunk, min(budget, max_chunk))
+        budget = min(budget, remaining)
+        remaining -= budget
+        content = r.get("content", "")
+        r["used_content"] = content[:budget]
+        allocated.append(r)
+    return allocated
+
+
+def _build_messages(query: str, context: List[Dict],
+                    budget: int = DEFAULT_CONTEXT_BUDGET) -> List[Dict]:
     """组装 RAG 提示词（注入用户身份 + 自定义系统提示词）。"""
-    # 加载用户身份上下文
     user_context = profile_to_context()
-    
-    # 渲染系统提示词
     system_prompt = render_system_prompt(user_context)
 
     if not context:
         user_content = f"用户问题：{query}\n\n（知识库为空或未检索到相关内容）"
     else:
+        context = _allocate_context_budget(context, budget)
         ctx_parts = []
         for i, c in enumerate(context, 1):
             path = c.get("path", "unknown")
-            content = c.get("content", "")[:1500]  # 每段最多 1500 字
-            ctx_parts.append(f"[{i}] 来源: {path}\n{content}")
+            content = c.get("used_content", "")
+            score = c.get("rrf_score")
+            score_info = f" [rrf:{score:.4f}]" if score is not None else ""
+            ctx_parts.append(f"[{i}]{score_info} 来源: {path}\n{content}")
         ctx_text = "\n\n".join(ctx_parts)
         user_content = (
             f"以下是从知识库检索到的相关片段：\n\n{ctx_text}\n\n"
@@ -100,15 +89,13 @@ def rag_answer(
     model: Optional[str] = None,
 ) -> Dict:
     """RAG 问答入口，返回 {"answer": str, "sources": [...], "mode": str}。"""
-    context = _collect_context(query, entity_type=entity_type, fts_k=top_k, vec_k=top_k)
+    context = _collect_context(query, entity_type=entity_type, top_k=top_k)
     messages = _build_messages(query, context)
 
-    # 检查 API 是否已配置
     cfg = load_config()
     has_api = bool(api_key or cfg.get("api_key"))
 
     if not has_api:
-        # 没有 LLM，退化为纯检索结果
         if not context:
             no_result_text = get_no_result_reply()
             return {
@@ -119,7 +106,9 @@ def rag_answer(
         parts = []
         for i, c in enumerate(context, 1):
             preview = c.get("content", "")[:300].replace("\n", " ")
-            parts.append(f"[{i}] {c.get('path', '')}\n    {preview}")
+            score = c.get("rrf_score")
+            score_info = f" [rrf:{score:.4f}]" if score is not None else ""
+            parts.append(f"[{i}]{score_info} {c.get('path', '')}\n    {preview}")
         answer = "（未配置 LLM API，以下为检索结果原文）\n\n" + "\n\n".join(parts)
         return {
             "answer": answer,
@@ -127,7 +116,6 @@ def rag_answer(
             "mode": "retrieval_only",
         }
 
-    # 调用 LLM 生成
     try:
         text = chat_completion(
             messages=messages,

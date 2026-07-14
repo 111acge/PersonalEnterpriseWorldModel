@@ -6,10 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-try:
-    from .llm_client import CONFIG_DIR
-except ImportError:
-    from llm_client import CONFIG_DIR
+from pewm.processors.llm_client import CONFIG_DIR
 
 
 PROMPT_FILE = CONFIG_DIR / "prompt.json"

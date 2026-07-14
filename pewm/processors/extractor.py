@@ -1,23 +1,31 @@
 """基于 LLM + 规则的知识提取器。
 
-优先调用 LLM（复用向量库同一套 API Key）分析笔记内容，智能识别实体类型。
+优先调用 LLM 分析笔记内容，智能识别实体类型并对输出做 Pydantic 校验。
 LLM 失败时回退到基于触发词的规则提取，整篇未命中时作为 note 兜底。
+合并策略遵循 schema 中的 auto_merge 与 merge-policy.yaml。
 """
 import json
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-try:
-    from .utils import load_yaml, now_iso, sanitize_filename, ROOT
-    from .llm_client import chat_completion, load_config
-except ImportError:
-    from utils import load_yaml, now_iso, sanitize_filename, ROOT
-    from llm_client import chat_completion, load_config
+from pydantic import BaseModel, Field, ValidationError
 
-CONFIG_DIR = ROOT / ".pipeline" / "config"
-SCHEMAS_DIR = CONFIG_DIR / "schemas"
+from pewm.paths import CONFIG_DIR, ROOT, SCHEMAS_DIR
+from pewm.processors.merge import merge_entity
+from pewm.processors.utils import load_yaml, now_iso, sanitize_filename
+from pewm.processors.llm_client import chat_completion, load_config
+
 EXTRACTION_RULES = CONFIG_DIR / "extraction-rules.yaml"
+
+
+class ExtractedEntity(BaseModel):
+    """LLM 返回实体的通用校验模型。"""
+    entity_type: str = Field(..., description="实体类型")
+    confidence: str = Field("中", description="置信度：高/中/低")
+
+    class Config:
+        extra = "allow"
 
 
 def load_schemas() -> Dict[str, Dict[str, Any]]:
@@ -37,19 +45,36 @@ def load_rules() -> List[Dict[str, Any]]:
 # ========== 模板渲染 ==========
 
 def render_template(template: str, context: Dict[str, Any]) -> str:
-    """极简模板渲染，支持 {{ var }} 和 {{ var | default('x') }}。"""
+    """轻量模板渲染，支持 {{ var }}、{{ var | default('x') }}、{{ var | join(',') }}。"""
     def repl(match):
         expr = match.group(1).strip()
+        filter_name = None
+        filter_arg = None
         if "|" in expr:
-            key, _ = expr.split("|", 1)
+            key, filter_expr = expr.split("|", 1)
             key = key.strip()
-            val = context.get(key)
+            filter_expr = filter_expr.strip()
+            if filter_expr.startswith("default(") and filter_expr.endswith(")"):
+                filter_name = "default"
+                filter_arg = filter_expr[8:-1].strip("\"' ")
+            elif filter_expr.startswith("join(") and filter_expr.endswith(")"):
+                filter_name = "join"
+                filter_arg = filter_expr[5:-1].strip("\"' ")
+        else:
+            key = expr
+
+        val = context.get(key)
+        if filter_name == "default":
             if val is None or val == "":
-                return ""
+                return filter_arg if filter_arg is not None else ""
+        if filter_name == "join":
             if isinstance(val, list):
-                return ", ".join(str(v) for v in val)
-            return str(val)
-        val = context.get(expr, "")
+                sep = filter_arg if filter_arg is not None else ", "
+                return sep.join(str(v) for v in val if v)
+            return str(val) if val is not None else ""
+
+        if val is None:
+            return ""
         if isinstance(val, list):
             return ", ".join(str(v) for v in val)
         return str(val)
@@ -107,10 +132,7 @@ _LLM_SYSTEM_PROMPT = """你是一个企业知识库的知识提取助手。
 
 
 def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """调用 LLM 分析文本，返回提取出的实体列表。
-
-    失败（API 未配置/网络错误/JSON 解析失败）时返回 []，调用方应走兜底逻辑。
-    """
+    """调用 LLM 分析文本，返回校验后的实体列表。失败时返回 []，调用方走兜底逻辑。"""
     cfg = load_config()
     if not cfg.get("api_key"):
         return []
@@ -118,7 +140,6 @@ def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> 
     schemas_desc = _build_schemas_prompt(schemas)
     system = _LLM_SYSTEM_PROMPT.format(schemas_desc=schemas_desc)
 
-    # 限制输入长度（按 4 字符/token 粗估，最大 6000 字符 ≈ 1500 token）
     truncated = text[:6000]
     if len(text) > 6000:
         truncated += "\n...(内容过长，已截断)"
@@ -136,16 +157,12 @@ def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> 
         print(f"[extractor] LLM 调用失败：{e}")
         return []
 
-    parsed = _parse_llm_json(response)
-    if parsed is None:
-        return []
-    return parsed
+    return _parse_and_validate_llm_json(response, schemas)
 
 
-def _parse_llm_json(text: str) -> Optional[List[Dict]]:
-    """尝试从 LLM 响应中解析 JSON 数组。容忍 ```json 包裹等常见噪音。"""
+def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """解析 LLM 响应，并用 Pydantic + schema 必填字段双重校验。"""
     text = text.strip()
-    # 剥掉 markdown 代码块
     m = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text)
     if m:
         text = m.group(1)
@@ -153,16 +170,46 @@ def _parse_llm_json(text: str) -> Optional[List[Dict]]:
     end = text.rfind("]")
     if start == -1 or end == -1:
         print("[extractor] LLM 响应中没有 JSON 数组")
-        return None
+        return []
     try:
-        result = json.loads(text[start:end + 1])
+        raw_items = json.loads(text[start:end + 1])
     except json.JSONDecodeError as e:
         print(f"[extractor] JSON 解析失败：{e}")
-        return None
-    if not isinstance(result, list):
+        return []
+    if not isinstance(raw_items, list):
         print("[extractor] LLM 返回的不是数组")
-        return None
-    return [r for r in result if isinstance(r, dict)]
+        return []
+
+    valid_items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            ExtractedEntity.model_validate(item)
+        except ValidationError as e:
+            print(f"[extractor] 实体校验失败：{e}")
+            continue
+
+        etype = item.get("entity_type")
+        if etype not in schemas:
+            print(f"[extractor] 未知实体类型：{etype}")
+            continue
+
+        # 必填字段校验
+        schema = schemas[etype]
+        missing = [f for f in schema.get("required_frontmatter", [])
+                   if f not in item or item[f] in (None, "")]
+        # 对 name/title/term/key 等主键字段必须存在
+        identity_fields = ["title", "term", "name", "key"]
+        if not any(item.get(f) for f in identity_fields):
+            missing.append("identity_field")
+        if missing:
+            print(f"[extractor] 实体 {etype} 缺少字段：{missing}，跳过")
+            continue
+
+        valid_items.append(item)
+
+    return valid_items
 
 
 # ========== 基于规则的提取（兜底） ==========
@@ -189,7 +236,10 @@ def _rule_extract(text: str, source: str,
 # ========== 统一入口 ==========
 
 def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
-    """提取实体：优先 LLM 智能分析，失败回退规则，再失败整篇存为 note。"""
+    """提取实体：优先 LLM 智能分析，失败回退规则，再失败整篇存为 note。
+
+    返回的每个元素包含 path/content/entity_type/frontmatter/merged。
+    """
     schemas = load_schemas()
 
     # 1. 优先：LLM 提取
@@ -220,9 +270,9 @@ def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
     return []
 
 
-def _llm_item_to_entity(item: Dict, schemas: Dict[str, Dict[str, Any]],
+def _llm_item_to_entity(item: Dict[str, Any], schemas: Dict[str, Dict[str, Any]],
                         source: str) -> Optional[Dict[str, Any]]:
-    """把 LLM 返回的 JSON 对象转换成标准 entity 字典。"""
+    """把 LLM 返回的 JSON 对象转换成标准 entity 字典，并触发合并逻辑。"""
     etype = item.get("entity_type")
     if not etype or etype not in schemas:
         return None
@@ -231,7 +281,7 @@ def _llm_item_to_entity(item: Dict, schemas: Dict[str, Dict[str, Any]],
     context = {
         "source": source,
         "updated_at": now_iso(),
-        "confidence": "llm-inferred",
+        "confidence": item.get("confidence", "中"),
     }
     for k, v in item.items():
         if k == "entity_type":
@@ -246,11 +296,10 @@ def _llm_item_to_entity(item: Dict, schemas: Dict[str, Dict[str, Any]],
                 context[field] = source
             elif field == "updated_at":
                 context[field] = now_iso()
+            elif field == "aliases" and etype in ("term", "system"):
+                context[field] = []
             else:
                 context[field] = ""
-
-    template = schema.get("content_template", "")
-    content = render_template(template, context)
 
     name_field = next(
         (f for f in ["title", "term", "name", "key", "case_id"] if context.get(f)),
@@ -258,18 +307,15 @@ def _llm_item_to_entity(item: Dict, schemas: Dict[str, Dict[str, Any]],
     )
     name = str(context.get(name_field, "")) if name_field else ""
     if not name:
-        name = content.splitlines()[0][:40].strip().lstrip("# ").strip()
-    if not name:
         name = "untitled"
     filename = sanitize_filename(name) + ".md"
 
     output_path = Path(ROOT) / schema["storage_path"] / filename
-    return {
-        "path": output_path,
-        "content": content,
-        "entity_type": etype,
-        "frontmatter": context,
-    }
+    template = schema.get("content_template", "")
+
+    merged = merge_entity(output_path, context, etype, template, render_template, schema=schema)
+    merged["frontmatter"] = context
+    return merged
 
 
 # ========== 规则提取的具体构建逻辑（兜底） ==========
@@ -337,10 +383,10 @@ def build_entity(rule: Dict[str, Any], sentence: str, full_text: str,
         return None
 
     template = schema["content_template"]
-    content = render_template(template, context)
     output_path = Path(ROOT) / target / filename
-    return {"path": output_path, "content": content,
-            "entity_type": entity_type, "frontmatter": context}
+    merged = merge_entity(output_path, context, entity_type, template, render_template, schema=schema)
+    merged["frontmatter"] = context
+    return merged
 
 
 def build_note_entity(text: str, source: str, schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -371,8 +417,8 @@ def build_note_entity(text: str, source: str, schema: Dict[str, Any]) -> Optiona
         "keywords": "、".join(keywords),
     }
     template = schema["content_template"]
-    content = render_template(template, context)
     filename = sanitize_filename(title) + ".md"
     output_path = Path(ROOT) / schema["storage_path"] / filename
-    return {"path": output_path, "content": content,
-            "entity_type": "note", "frontmatter": context}
+    merged = merge_entity(output_path, context, "note", template, render_template, schema=schema)
+    merged["frontmatter"] = context
+    return merged

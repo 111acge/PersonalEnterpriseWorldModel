@@ -6,10 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-try:
-    from .llm_client import CONFIG_DIR, load_config, save_config  # 复用同一个配置目录
-except ImportError:
-    from llm_client import CONFIG_DIR, load_config, save_config
+from pewm.processors.llm_client import CONFIG_DIR, load_config, save_config  # 复用同一个配置目录
 
 
 PROFILE_FILE = CONFIG_DIR / "profile.json"

@@ -9,14 +9,8 @@
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-try:
-    from .utils import ROOT
-    from .ocr_api import ocr_by_api, load_ocr_config
-except ImportError:
-    from utils import ROOT
-    from ocr_api import ocr_by_api, load_ocr_config
-
-MEDIA_DIR = ROOT / "00-Inbox" / "_media"
+from pewm.paths import MEDIA_DIR
+from pewm.processors.ocr_api import ocr_by_api, load_ocr_config
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
 
 # 全局缓存：PaddleOCR 实例
