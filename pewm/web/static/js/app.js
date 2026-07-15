@@ -10,6 +10,7 @@ const app = {
     init() {
         this.bindNav();
         this.bindTheme();
+        this.bindWindowClose();
         this.bindChat();
         this.bindSearch();
         this.bindInbox();
@@ -63,6 +64,18 @@ const app = {
                 document.documentElement.setAttribute('data-theme', 'dark');
                 localStorage.setItem('theme', 'dark');
                 toggle.textContent = '☀️';
+            }
+        });
+    },
+
+    bindWindowClose() {
+        const btn = document.getElementById('window-close');
+        if (!btn) return;
+        btn.addEventListener('click', () => {
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.close_window) {
+                window.pywebview.api.close_window();
+            } else {
+                window.close();
             }
         });
     },

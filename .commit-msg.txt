@@ -1,0 +1,7 @@
+feat: 在主界面顶部栏添加窗口关闭按钮
+
+- index.html：顶部栏新增 window-close 按钮，与主题切换按钮并列
+- style.css：新增 .topbar-actions 和 .window-close 样式，hover 变红
+- app.js：新增 bindWindowClose，点击调用 pywebview api 关闭窗口
+- splash_controller.py：新增 close_window API，供主界面调用
+- 已重新打包 exe 验证通过

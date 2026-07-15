@@ -231,14 +231,19 @@ class SplashController:
         self.start()
         return {"success": True}
 
-    def exit_app(self):
-        """退出应用。"""
-        self._stop_event.set()
+    def close_window(self):
+        """关闭当前窗口（不强制退出进程）。"""
         try:
             if self._window:
                 self._window.destroy()
         except Exception:
             pass
+        return {"success": True}
+
+    def exit_app(self):
+        """退出应用。"""
+        self._stop_event.set()
+        self.close_window()
         sys.exit(0)
 
     def go_home(self):
