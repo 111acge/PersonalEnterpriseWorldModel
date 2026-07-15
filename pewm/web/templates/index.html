@@ -82,24 +82,25 @@
                         <div class="card chat-history" id="chat-history"></div>
                         <div class="chat-input-area">
                             <div class="chat-filters">
-                                <select id="chat-type" class="input">
-                                    <option value="">全部类型</option>
-                                    <option value="term">术语</option>
-                                    <option value="constant">常量</option>
-                                    <option value="case">案例</option>
-                                    <option value="process">流程</option>
-                                    <option value="system">系统</option>
-                                    <option value="skill">技能</option>
-                                </select>
-                                <label class="checkbox">
-                                    <input type="checkbox" id="chat-use-rag" checked>
-                                    <span>RAG 生成</span>
-                                </label>
-                            </div>
-                            <div class="chat-input-row">
-                                <textarea id="chat-input" class="input" rows="2" placeholder="输入你的问题..."></textarea>
-                                <button class="btn btn-primary" id="chat-send">发送</button>
-                            </div>
+                            <select id="chat-type" class="input">
+                                <option value="">全部类型</option>
+                                <option value="term">术语</option>
+                                <option value="constant">常量</option>
+                                <option value="case">案例</option>
+                                <option value="process">流程</option>
+                                <option value="system">系统</option>
+                                <option value="skill">技能</option>
+                            </select>
+                            <label class="checkbox">
+                                <input type="checkbox" id="chat-use-rag" checked>
+                                <span>RAG 生成</span>
+                            </label>
+                            <button class="btn btn-ghost" id="chat-clear">清空对话</button>
+                        </div>
+                        <div class="chat-input-row">
+                            <textarea id="chat-input" class="input" rows="2" placeholder="输入你的问题..."></textarea>
+                            <button class="btn btn-primary" id="chat-send">发送</button>
+                        </div>
                         </div>
                     </div>
                 </section>
@@ -190,6 +191,11 @@
                             <button class="btn btn-primary" id="pipeline-ocr">批量 OCR</button>
                             <button class="btn btn-primary" id="pipeline-rebuild">重建向量索引</button>
                             <button class="btn btn-ghost" id="pipeline-refresh">刷新状态</button>
+                        </div>
+                        <div class="pipeline-toolbar">
+                            <button class="btn btn-warning" id="watcher-start">🔄 开启后台监听</button>
+                            <button class="btn btn-danger" id="watcher-stop">⏹ 停止后台监听</button>
+                            <span id="watcher-status" style="margin-left:12px;color:var(--text-secondary)">未开启</span>
                         </div>
                         <div class="pipeline-status" id="pipeline-status">状态：准备就绪</div>
                         <div class="log-area" id="pipeline-logs"></div>
@@ -301,6 +307,8 @@
             </div>
         </main>
     </div>
+
+    <div id="toast-container" class="toast-container"></div>
 
     <!-- 文档详情弹窗 -->
     <div id="modal" class="modal">

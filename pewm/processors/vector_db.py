@@ -3,13 +3,15 @@
 优先使用 sentence-transformers (bge-small-zh-v1.5) 做语义检索，
 如未安装则自动回退到字符 2-gram TF-IDF + numpy 余弦相似度。
 
-数据持久化在 data/vector/index.pkl。
+数据持久化在 data/vector/vectors.db（SQLite）。
 """
 import hashlib
+import json
 import math
-import pickle
 import re
+import sqlite3
 import sys
+import threading
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -20,8 +22,10 @@ import numpy as np
 from pewm.paths import ROOT
 
 VECTOR_DIR = ROOT / "data" / "vector"
-INDEX_FILE = VECTOR_DIR / "index.pkl"
+DB_FILE = VECTOR_DIR / "vectors.db"
 MODEL_CACHE_DIR = VECTOR_DIR / "embedding_model"
+
+_thread_local = threading.local()
 
 # 全局单例：embedding 模型（懒加载，避免重复加载耗时）
 _EMBEDDER = None
@@ -33,6 +37,47 @@ def _resource_path(*parts: str) -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS).joinpath(*parts)
     return ROOT.joinpath(*parts)
+
+
+def _db_connection():
+    """获取线程本地 SQLite 连接。"""
+    conn = getattr(_thread_local, "conn", None)
+    if conn is None:
+        VECTOR_DIR.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(DB_FILE))
+        conn.row_factory = sqlite3.Row
+        _thread_local.conn = conn
+    return conn
+
+
+def _close_db():
+    conn = getattr(_thread_local, "conn", None)
+    if conn is not None:
+        conn.close()
+        _thread_local.conn = None
+
+
+def _init_db():
+    """初始化向量库 SQLite 表。"""
+    conn = _db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vectors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            entity_type TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            content TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            deleted_at TEXT DEFAULT ''
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.commit()
 
 
 def _load_embedder(download_progress_cb=None):
@@ -49,7 +94,6 @@ def _load_embedder(download_progress_cb=None):
         return _EMBEDDER, _EMBEDDER_KIND
 
     try:
-        import sys
         from sentence_transformers import SentenceTransformer
 
         # 候选本地路径（按优先级）
@@ -107,7 +151,7 @@ def _load_embedder(download_progress_cb=None):
             _load_embedder._done_flag = True
             watcher.join(timeout=2)
 
-        print(f"[vector] 已加载语义 embedding 模型 (transformer)")
+        print("[vector] 已加载语义 embedding 模型 (transformer)")
         return _EMBEDDER, _EMBEDDER_KIND
     except ImportError:
         print("[vector] sentence-transformers 未安装，回退到 TF-IDF 模式")
@@ -165,19 +209,36 @@ def _encode_tfidf(text: str, vocab: Dict[str, int], dim: int) -> np.ndarray:
     return vec
 
 
-class VectorDB:
-    """基于 numpy + pickle 的向量库。
+def _get_meta(key: str, default=None):
+    conn = _db_connection()
+    row = conn.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    try:
+        return json.loads(row["value"])
+    except Exception:
+        return row["value"]
 
-    存储结构（data/vector/index.pkl）：
-    {
-        "kind": "transformer" | "tfidf",
-        "vocab": {...},              # 仅 tfidf 模式
-        "docs": [{"id", "path", "entity_type", "content", "content_hash"}, ...],
-        "vectors": np.ndarray,       # shape (N, dim), float32
-    }
+
+def _set_meta(key: str, value):
+    conn = _db_connection()
+    conn.execute(
+        "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, json.dumps(value)),
+    )
+    conn.commit()
+
+
+class VectorDB:
+    """基于 SQLite + numpy 的向量库。
+
+    存储结构（data/vector/vectors.db）：
+    - vectors 表：id, path, entity_type, content_hash, content, vector(BLOB), deleted_at
+    - metadata 表：key, value（存储 kind/vocab 等元信息）
     """
 
     def __init__(self):
+        _init_db()
         self.docs: List[Dict] = []
         self.vectors: Optional[np.ndarray] = None
         self.vocab: Dict[str, int] = {}
@@ -185,32 +246,43 @@ class VectorDB:
         self._load()
 
     def _load(self):
-        if INDEX_FILE.exists():
-            try:
-                data = pickle.loads(INDEX_FILE.read_bytes())
-                self.docs = data.get("docs", [])
-                self.vectors = data.get("vectors")
-                self.vocab = data.get("vocab", {})
-                self.kind = data.get("kind", "tfidf")
-                # 兼容旧索引：补齐 deleted_at 字段
-                for d in self.docs:
-                    d.setdefault("deleted_at", "")
-            except Exception as e:
-                print(f"[vector] 加载索引失败，将重建: {e}")
+        conn = _db_connection()
+        self.kind = _get_meta("kind", "tfidf")
+        self.vocab = _get_meta("vocab", {})
+        rows = conn.execute(
+            "SELECT id, path, entity_type, content_hash, content, vector, deleted_at "
+            "FROM vectors ORDER BY id"
+        ).fetchall()
+        self.docs = [dict(r) for r in rows]
+        if rows:
+            self.vectors = np.stack([np.frombuffer(r["vector"], dtype=np.float32) for r in rows])
+        else:
+            self.vectors = None
 
-    def _save(self):
-        VECTOR_DIR.mkdir(parents=True, exist_ok=True)
-        data = {
-            "kind": self.kind,
-            "vocab": self.vocab,
-            "docs": self.docs,
-            "vectors": self.vectors,
-        }
-        INDEX_FILE.write_bytes(pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL))
+    def _save_doc(self, path: str, entity_type: str, content_hash: str, content: str,
+                  vector: np.ndarray, deleted_at: str = ""):
+        conn = _db_connection()
+        conn.execute(
+            """
+            INSERT INTO vectors (path, entity_type, content_hash, content, vector, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                entity_type = excluded.entity_type,
+                content_hash = excluded.content_hash,
+                content = excluded.content,
+                vector = excluded.vector,
+                deleted_at = excluded.deleted_at
+            """,
+            (path, entity_type, content_hash, content, vector.tobytes(), deleted_at),
+        )
+        conn.commit()
 
     def _encode(self, texts: List[str]) -> np.ndarray:
         embedder, kind = _load_embedder()
         if kind == "transformer" and embedder is not None:
+            if self.kind != "transformer":
+                self.kind = "transformer"
+                _set_meta("kind", "transformer")
             return _encode_transformer(embedder, texts)
         # TF-IDF 回退
         if not self.vocab:
@@ -222,7 +294,10 @@ class VectorDB:
                     if g not in self.vocab:
                         self.vocab[g] = len(self.vocab)
         dim = max(len(self.vocab), 1)
-        return np.stack([_encode_tfidf(t, self.vocab, dim) for t in texts])
+        vecs = np.stack([_encode_tfidf(t, self.vocab, dim) for t in texts])
+        # 持久化 vocab 变化
+        _set_meta("vocab", self.vocab)
+        return vecs
 
     def add(self, path: str, entity_type: str, content: str) -> None:
         """添加或更新一个文档（按 path 去重）。
@@ -230,21 +305,49 @@ class VectorDB:
         更新时自动把 deleted_at 置空（如果之前被软删除则恢复）。
         """
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
-        for i, doc in enumerate(self.docs):
-            if doc["path"] == path:
-                if doc.get("content_hash") == content_hash and not doc.get("deleted_at"):
-                    return  # 内容未变且未删除，跳过
+        existing = next((i for i, d in enumerate(self.docs) if d["path"] == path), None)
+
+        if existing is not None:
+            doc = self.docs[existing]
+            if doc.get("content_hash") == content_hash and not doc.get("deleted_at"):
+                return  # 内容未变且未删除，跳过
+            vec = self._encode([content])
+            if self.vectors is not None and self.vectors.shape[1] == vec.shape[1]:
+                self.vectors[existing] = vec[0]
+            else:
                 doc["content"] = content
                 doc["content_hash"] = content_hash
                 doc["entity_type"] = entity_type
-                doc["deleted_at"] = ""  # 自动恢复
-                vec = self._encode([content])
-                if self.vectors is not None and self.vectors.shape[1] == vec.shape[1]:
-                    self.vectors[i] = vec[0]
-                else:
-                    self._rebuild_all()
-                self._save()
+                doc["deleted_at"] = ""
+                self._rebuild_all()
                 return
+            doc["content"] = content
+            doc["content_hash"] = content_hash
+            doc["entity_type"] = entity_type
+            doc["deleted_at"] = ""
+            self._save_doc(path, entity_type, content_hash, content, vec[0], "")
+            return
+
+        # 新文档
+        vec = self._encode([content])
+        if self.vectors is None or len(self.vectors) == 0:
+            self.vectors = vec
+        elif self.vectors.shape[1] == vec.shape[1]:
+            self.vectors = np.vstack([self.vectors, vec])
+        else:
+            # 维度变化，整体重建
+            new_id = max((d["id"] for d in self.docs), default=0) + 1
+            self.docs.append({
+                "id": new_id,
+                "path": path,
+                "entity_type": entity_type,
+                "content": content,
+                "content_hash": content_hash,
+                "deleted_at": "",
+            })
+            self._rebuild_all()
+            return
+
         new_id = max((d["id"] for d in self.docs), default=0) + 1
         self.docs.append({
             "id": new_id,
@@ -254,21 +357,17 @@ class VectorDB:
             "content_hash": content_hash,
             "deleted_at": "",
         })
-        vec = self._encode([content])
-        if self.vectors is None or len(self.vectors) == 0:
-            self.vectors = vec
-        elif self.vectors.shape[1] == vec.shape[1]:
-            self.vectors = np.vstack([self.vectors, vec])
-        else:
-            self._rebuild_all()
-        self._save()
+        self._save_doc(path, entity_type, content_hash, content, vec[0], "")
 
     def soft_delete(self, path: str) -> bool:
         """软删除：打 deleted_at 标记。向量保留在矩阵中，检索时跳过。"""
         for d in self.docs:
             if d["path"] == path and not d.get("deleted_at"):
-                d["deleted_at"] = datetime.now().isoformat(timespec="seconds")
-                self._save()
+                ts = datetime.now().isoformat(timespec="seconds")
+                d["deleted_at"] = ts
+                conn = _db_connection()
+                conn.execute("UPDATE vectors SET deleted_at = ? WHERE path = ?", (ts, path))
+                conn.commit()
                 return True
         return False
 
@@ -277,7 +376,9 @@ class VectorDB:
         for d in self.docs:
             if d["path"] == path and d.get("deleted_at"):
                 d["deleted_at"] = ""
-                self._save()
+                conn = _db_connection()
+                conn.execute("UPDATE vectors SET deleted_at = '' WHERE path = ?", (path,))
+                conn.commit()
                 return True
         return False
 
@@ -290,7 +391,9 @@ class VectorDB:
                     self.vectors = np.delete(self.vectors, i, axis=0)
                     if self.vectors.shape[0] == 0:
                         self.vectors = None
-                self._save()
+                conn = _db_connection()
+                conn.execute("DELETE FROM vectors WHERE path = ?", (path,))
+                conn.commit()
                 return True
         return False
 
@@ -298,25 +401,42 @@ class VectorDB:
         """把所有不在 valid_paths 中的文档软删除，返回被标记的数量。"""
         count = 0
         ts = datetime.now().isoformat(timespec="seconds")
+        conn = _db_connection()
         for d in self.docs:
             if d["path"] not in valid_paths and not d.get("deleted_at"):
                 d["deleted_at"] = ts
+                conn.execute("UPDATE vectors SET deleted_at = ? WHERE path = ?", (ts, d["path"]))
                 count += 1
         if count > 0:
-            self._save()
+            conn.commit()
         return count
 
     def _rebuild_all(self):
         if not self.docs:
             self.vectors = None
+            conn = _db_connection()
+            conn.execute("DELETE FROM vectors")
+            conn.commit()
             return
         texts = [d["content"] for d in self.docs]
         self.vectors = self._encode(texts)
+        # 重新写入全部向量
+        conn = _db_connection()
+        conn.execute("DELETE FROM vectors")
+        for doc, vec in zip(self.docs, self.vectors):
+            conn.execute(
+                "INSERT INTO vectors (path, entity_type, content_hash, content, vector, deleted_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (doc["path"], doc["entity_type"], doc["content_hash"], doc["content"],
+                 vec.tobytes(), doc.get("deleted_at", "")),
+            )
+        conn.commit()
+        _set_meta("kind", self.kind)
+        _set_meta("vocab", self.vocab)
 
     def rebuild(self):
         """强制重建全部向量索引。"""
         self._rebuild_all()
-        self._save()
 
     def search(self, query: str, entity_type: Optional[str] = None,
                top_k: int = 10) -> List[Dict]:

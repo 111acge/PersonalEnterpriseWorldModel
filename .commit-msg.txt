@@ -1,0 +1,11 @@
+feat: 完成剩余优化项（向量库、后台监听、对话历史、rerank、批量提取、测试等）
+
+- refactor: 向量库从 pickle 迁移到 SQLite，持久化更稳定、启动更快
+- feat: 新增 watchdog 后台监听，Inbox 文件变化自动触发 AI 管线
+- feat: 对话历史支持，RAG 可携带多轮上下文
+- feat: 混合检索后增加 embedding rerank 重排序
+- feat: LLM 批量提取，多文件合并一次请求
+- feat: 前端 Toast 提示、按钮 loading、移动端响应式适配
+- test: 新增 pytest 测试套件（database/merge/retrieval/vector_db）
+- fix: Pydantic ConfigDict 弃用警告
+- chore: build.spec 加入 watchdog，requirements.txt 加入 watchdog/pytest

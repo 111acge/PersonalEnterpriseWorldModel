@@ -68,8 +68,38 @@ const app = {
     },
 
     async api(url, options = {}) {
-        const res = await fetch(url, options);
-        return res.json();
+        try {
+            const res = await fetch(url, options);
+            const data = await res.json();
+            if (!data.success && data.error) {
+                this.showToast(data.error, 'error');
+            }
+            return data;
+        } catch (e) {
+            this.showToast('网络请求失败：' + e.message, 'error');
+            return { success: false, error: e.message };
+        }
+    },
+
+    showToast(message, type = 'info', duration = 3000) {
+        const container = document.getElementById('toast-container');
+        const div = document.createElement('div');
+        div.className = `toast ${type}`;
+        div.textContent = message;
+        container.appendChild(div);
+        setTimeout(() => div.remove(), duration);
+    },
+
+    setLoading(selector, loading) {
+        const btn = typeof selector === 'string' ? document.querySelector(selector) : selector;
+        if (!btn) return;
+        if (loading) {
+            btn.classList.add('loading');
+            btn.disabled = true;
+        } else {
+            btn.classList.remove('loading');
+            btn.disabled = false;
+        }
     },
 
     async loadStats() {
@@ -99,6 +129,37 @@ const app = {
                 this.sendChat();
             }
         });
+        document.getElementById('chat-clear').addEventListener('click', () => this.clearChat());
+        this.loadChatHistory();
+    },
+
+    getChatSessionId() {
+        let sid = localStorage.getItem('chat_session_id');
+        if (!sid) {
+            sid = 'session-' + Date.now();
+            localStorage.setItem('chat_session_id', sid);
+        }
+        return sid;
+    },
+
+    async loadChatHistory() {
+        const sid = this.getChatSessionId();
+        const data = await this.api(`/api/chat/history?session_id=${encodeURIComponent(sid)}`);
+        if (!data.success) return;
+        const history = document.getElementById('chat-history');
+        history.innerHTML = '';
+        data.data.forEach(m => this.appendChatMessage(m.role, m.content));
+    },
+
+    async clearChat() {
+        const sid = this.getChatSessionId();
+        await this.api('/api/chat/history/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sid })
+        });
+        document.getElementById('chat-history').innerHTML = '';
+        localStorage.removeItem('chat_session_id');
     },
 
     async sendChat() {
@@ -108,15 +169,18 @@ const app = {
         input.value = '';
         const type = document.getElementById('chat-type').value;
         const useRag = document.getElementById('chat-use-rag').checked;
+        const sessionId = this.getChatSessionId();
         this.appendChatMessage('user', q);
         const thinking = this.appendChatMessage('assistant', '正在检索并生成回答...');
+        this.setLoading('#chat-send', true);
 
         const data = await this.api('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ q, type, use_rag: useRag })
+            body: JSON.stringify({ q, type, use_rag: useRag, session_id: sessionId })
         });
 
+        this.setLoading('#chat-send', false);
         thinking.remove();
         if (data.success) {
             const result = data.data;
@@ -156,8 +220,10 @@ const app = {
         if (!q) return;
         const resultsDiv = document.getElementById('search-results');
         resultsDiv.innerHTML = '<div class="result-item">搜索中...</div>';
+        this.setLoading('#search-btn', true);
 
         const data = await this.api(`/api/search?q=${encodeURIComponent(q)}&type=${type}&top_k=10`);
+        this.setLoading('#search-btn', false);
         resultsDiv.innerHTML = '';
         if (!data.success) {
             resultsDiv.innerHTML = `<div class="result-item">搜索失败：${data.error}</div>`;
@@ -188,17 +254,17 @@ const app = {
         document.getElementById('inbox-save').addEventListener('click', async () => {
             const title = document.getElementById('inbox-title').value;
             const content = document.getElementById('inbox-content').value;
+            this.setLoading('#inbox-save', true);
             const data = await this.api('/api/inbox', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ title, content })
             });
+            this.setLoading('#inbox-save', false);
             if (data.success) {
                 document.getElementById('inbox-title').value = '';
                 document.getElementById('inbox-content').value = '';
-                alert('已投递到：' + data.path);
-            } else {
-                alert('投递失败：' + data.error);
+                this.showToast('已投递到：' + data.path, 'success');
             }
         });
     },
@@ -267,7 +333,7 @@ const app = {
 
     async docAction(action, name) {
         if (this.selectedDocs.size === 0) {
-            alert('请先选择文档');
+            this.showToast('请先选择文档', 'error');
             return;
         }
         if (!confirm(`确定要对 ${this.selectedDocs.size} 篇文档执行「${name}」吗？`)) return;
@@ -276,7 +342,7 @@ const app = {
             const data = await this.api(`/api/documents/${encodeURIComponent(path)}${action}`, { method: 'POST' });
             lastMsg = data.message || data.error;
         }
-        alert(lastMsg);
+        this.showToast(lastMsg, 'success');
         this.selectedDocs.clear();
         this.loadDocuments();
     },
@@ -295,6 +361,8 @@ const app = {
         document.getElementById('pipeline-ocr').addEventListener('click', () => this.runPipeline('/api/ocr/run', 'OCR'));
         document.getElementById('pipeline-rebuild').addEventListener('click', () => this.runPipeline('/api/vector/rebuild', '向量索引重建'));
         document.getElementById('pipeline-refresh').addEventListener('click', () => this.refreshPipelineStatus());
+        document.getElementById('watcher-start').addEventListener('click', () => this.watcherAction('/api/watcher/start', 'start'));
+        document.getElementById('watcher-stop').addEventListener('click', () => this.watcherAction('/api/watcher/stop', 'stop'));
     },
 
     async runPipeline(url, name) {
@@ -306,8 +374,7 @@ const app = {
         if (data.success) {
             this.startPipelinePolling();
             this.setStatus('busy', `${name}运行中...`);
-        } else {
-            alert(data.error);
+            this.showToast(`${name}已启动`, 'info');
         }
     },
 
@@ -337,6 +404,21 @@ const app = {
                 `Inbox 已处理：${s.inbox_total}  |  已索引文档：${s.document_count}`;
         }
         this.loadStats();
+        this.refreshWatcherStatus();
+    },
+
+    async watcherAction(url, action) {
+        const data = await this.api(url, { method: 'POST' });
+        this.showToast(data.message || data.error, data.success ? 'success' : 'error');
+        this.refreshWatcherStatus();
+    },
+
+    async refreshWatcherStatus() {
+        const data = await this.api('/api/watcher/status');
+        if (data.success) {
+            const label = document.getElementById('watcher-status');
+            label.textContent = data.data.running ? '运行中' : '未开启';
+        }
     },
 
     setStatus(state, text) {
@@ -602,6 +684,9 @@ const app = {
         const el = document.getElementById(id);
         el.textContent = data.message || data.error || '';
         el.style.color = data.success ? 'var(--success)' : 'var(--danger)';
+        if (data.message || data.error) {
+            this.showToast(data.message || data.error, data.success ? 'success' : 'error');
+        }
     },
 
     bindModal() {

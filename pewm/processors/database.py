@@ -87,6 +87,19 @@ def init_db() -> None:
                 deleted_at TEXT DEFAULT ''
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_session
+            ON conversations(session_id, created_at)
+        """)
         # 兼容旧库：如果旧表没有 deleted_at 字段就补上
         try:
             conn.execute("ALTER TABLE documents ADD COLUMN deleted_at TEXT DEFAULT ''")
@@ -350,3 +363,31 @@ def get_stats() -> Dict:
             "deleted_count": deleted_count,
             "db_path": str(DB_PATH),
         }
+
+
+def add_conversation_message(session_id: str, role: str, content: str) -> None:
+    """保存一条对话消息。"""
+    with db_connection() as conn:
+        conn.execute(
+            "INSERT INTO conversations (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, role, content, now_iso()),
+        )
+        conn.commit()
+
+
+def get_conversation_history(session_id: str, limit: int = 20) -> List[Dict]:
+    """获取最近 N 条对话历史。"""
+    with db_connection() as conn:
+        rows = conn.execute(
+            "SELECT role, content, created_at FROM conversations "
+            "WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+            (session_id, limit),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+
+def clear_conversation_history(session_id: str) -> None:
+    """清空某会话的历史。"""
+    with db_connection() as conn:
+        conn.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+        conn.commit()

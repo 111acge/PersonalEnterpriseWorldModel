@@ -1,8 +1,10 @@
-"""混合检索：FTS5 关键词 + 向量语义，使用 RRF 重排序。"""
+"""混合检索：FTS5 关键词 + 向量语义，使用 RRF 重排序 + embedding rerank。"""
 from typing import Dict, List, Optional
 
+import numpy as np
+
 from pewm.processors.database import search_documents
-from pewm.processors.vector_db import VectorDB
+from pewm.processors.vector_db import VectorDB, _load_embedder
 
 
 def _normalize_scores(results: List[Dict], score_key: str = "score",
@@ -66,10 +68,41 @@ def reciprocal_rank_fusion(fts_results: List[Dict], vec_results: List[Dict],
     return output[:top_k]
 
 
+def _embedding_rerank(query: str, candidates: List[Dict]) -> List[Dict]:
+    """用 embedding 模型对候选结果做最终重排序。
+
+    仅在有 sentence-transformers 时启用；否则保持 RRF 顺序。
+    """
+    if not candidates:
+        return candidates
+    embedder, kind = _load_embedder()
+    if kind != "transformer" or embedder is None:
+        return candidates
+
+    texts = [query] + [r.get("content", "") for r in candidates]
+    try:
+        vecs = embedder.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        qvec = vecs[0]
+        dvecs = vecs[1:]
+        scores = dvecs @ qvec
+        for r, score in zip(candidates, scores):
+            r["rerank_score"] = round(float(score), 4)
+        # 综合得分：70% rerank + 30% rrf（都已归一化到 0~1 附近）
+        for r in candidates:
+            r["final_score"] = round(r.get("rerank_score", 0) * 0.7 + r.get("rrf_score", 0) * 0.3, 4)
+        candidates.sort(key=lambda x: -x["final_score"])
+    except Exception as e:
+        print(f"[retrieval] rerank 失败：{e}")
+    return candidates
+
+
 def hybrid_search(query: str, entity_type: Optional[str] = None,
-                  top_k: int = 10, vec_k: int = 20) -> List[Dict]:
+                  top_k: int = 10, vec_k: int = 20, rerank: bool = True) -> List[Dict]:
     """对外暴露的混合检索接口。"""
     fts_hits = search_documents(query, entity_type=entity_type, limit=top_k * 2)
     vdb = VectorDB()
     vec_hits = vdb.search(query, entity_type=entity_type, top_k=vec_k)
-    return reciprocal_rank_fusion(fts_hits, vec_hits, top_k=top_k)
+    fused = reciprocal_rank_fusion(fts_hits, vec_hits, top_k=max(top_k, 20))
+    if rerank:
+        fused = _embedding_rerank(query, fused)
+    return fused[:top_k]

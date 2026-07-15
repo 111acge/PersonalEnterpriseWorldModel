@@ -52,10 +52,18 @@ def _allocate_context_budget(results: List[Dict], total_budget: int) -> List[Dic
 
 
 def _build_messages(query: str, context: List[Dict],
+                    history: List[Dict] = None,
                     budget: int = DEFAULT_CONTEXT_BUDGET) -> List[Dict]:
-    """组装 RAG 提示词（注入用户身份 + 自定义系统提示词）。"""
+    """组装 RAG 提示词（注入用户身份 + 自定义系统提示词 + 对话历史）。"""
     user_context = profile_to_context()
     system_prompt = render_system_prompt(user_context)
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # 注入简短对话历史
+    if history:
+        for h in history[-6:]:
+            messages.append({"role": h["role"], "content": h["content"]})
 
     if not context:
         user_content = f"用户问题：{query}\n\n（知识库为空或未检索到相关内容）"
@@ -74,10 +82,8 @@ def _build_messages(query: str, context: List[Dict],
             f"---\n用户问题：{query}\n\n"
             "请基于以上上下文回答问题。如果上下文不足以回答，请明确说明。"
         )
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
+    messages.append({"role": "user", "content": user_content})
+    return messages
 
 
 def rag_answer(
@@ -87,10 +93,11 @@ def rag_answer(
     api_key: Optional[str] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
+    history: List[Dict] = None,
 ) -> Dict:
     """RAG 问答入口，返回 {"answer": str, "sources": [...], "mode": str}。"""
     context = _collect_context(query, entity_type=entity_type, top_k=top_k)
-    messages = _build_messages(query, context)
+    messages = _build_messages(query, context, history=history)
 
     cfg = load_config()
     has_api = bool(api_key or cfg.get("api_key"))

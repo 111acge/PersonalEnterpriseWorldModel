@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from pewm.paths import CONFIG_DIR, ROOT, SCHEMAS_DIR
 from pewm.processors.merge import merge_entity
@@ -21,11 +21,10 @@ EXTRACTION_RULES = CONFIG_DIR / "extraction-rules.yaml"
 
 class ExtractedEntity(BaseModel):
     """LLM 返回实体的通用校验模型。"""
+    model_config = ConfigDict(extra="allow")
+
     entity_type: str = Field(..., description="实体类型")
     confidence: str = Field("中", description="置信度：高/中/低")
-
-    class Config:
-        extra = "allow"
 
 
 def load_schemas() -> Dict[str, Dict[str, Any]]:
@@ -131,6 +130,19 @@ _LLM_SYSTEM_PROMPT = """你是一个企业知识库的知识提取助手。
 """
 
 
+_LLM_BATCH_PROMPT = _LLM_SYSTEM_PROMPT + """
+
+本次输入包含多篇随手记，每篇以 [SOURCE:index] 开头。请在每个实体中增加一个字段 "source_index"，
+表示该实体来自第几篇输入（从 0 开始计数）。其他字段要求不变。
+
+示例输出：
+[
+  {{"entity_type": "term", "source_index": 0, "term": "RAG", "definition": "...", "confidence": "高"}},
+  {{"entity_type": "case", "source_index": 1, "title": "...", "confidence": "中"}}
+]
+"""
+
+
 def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     """调用 LLM 分析文本，返回校验后的实体列表。失败时返回 []，调用方走兜底逻辑。"""
     cfg = load_config()
@@ -158,6 +170,56 @@ def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> 
         return []
 
     return _parse_and_validate_llm_json(response, schemas)
+
+
+def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """批量调用 LLM 提取多篇笔记中的实体。
+
+    items: [(source, text), ...]
+    返回：与 items 一一对应的实体列表，每个元素是该 source 提取到的实体 dict 列表。
+    """
+    cfg = load_config()
+    if not cfg.get("api_key") or not items:
+        return [[] for _ in items]
+
+    schemas_desc = _build_schemas_prompt(schemas)
+    system = _LLM_BATCH_PROMPT.format(schemas_desc=schemas_desc)
+
+    parts = []
+    total_len = 0
+    included = []
+    for idx, (source, text) in enumerate(items):
+        remain = max(0, 12000 - total_len)
+        chunk = text[:min(1500, remain)]
+        if not chunk:
+            break
+        parts.append(f"[SOURCE:{idx}]\n来源文件：{source}\n内容：\n{chunk}\n")
+        total_len += len(chunk)
+        included.append(idx)
+        if total_len >= 12000:
+            break
+
+    try:
+        response = chat_completion(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": "\n".join(parts)},
+            ],
+            temperature=0.2,
+            max_tokens=4000,
+        )
+    except Exception as e:
+        print(f"[extractor] 批量 LLM 调用失败：{e}")
+        return [[] for _ in items]
+
+    raw_items = _parse_and_validate_llm_json(response, schemas)
+    # 按 source_index 分组
+    grouped: List[List[Dict]] = [[] for _ in items]
+    for item in raw_items:
+        idx = item.get("source_index", 0)
+        if isinstance(idx, int) and 0 <= idx < len(items):
+            grouped[idx].append(item)
+    return grouped
 
 
 def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -268,6 +330,41 @@ def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
             print(f"  [fallback] 整篇存为 note")
             return [note]
     return []
+
+
+def extract_entities_batch(items: List[tuple]) -> List[List[Dict[str, Any]]]:
+    """批量提取实体。
+
+    items: [(source, text), ...]
+    返回：与 items 一一对应的 entity 列表列表。
+    """
+    if not items:
+        return []
+    schemas = load_schemas()
+
+    # 1. 优先：批量 LLM 提取
+    grouped = _llm_extract_batch(items, schemas)
+    any_llm = any(grouped)
+    if any_llm:
+        results = []
+        for idx, (source, text) in enumerate(items):
+            llm_items = grouped[idx]
+            if llm_items:
+                converted = []
+                for item in llm_items:
+                    c = _llm_item_to_entity(item, schemas, source)
+                    if c:
+                        converted.append(c)
+                if converted:
+                    print(f"  [llm-batch] {source} 提取到 {len(converted)} 个实体")
+                    results.append(converted)
+                    continue
+            # 单个文件 fallback
+            results.append(extract_entities(text, source))
+        return results
+
+    # 2. 全部 fallback：逐文件规则提取
+    return [extract_entities(text, source) for source, text in items]
 
 
 def _llm_item_to_entity(item: Dict[str, Any], schemas: Dict[str, Dict[str, Any]],

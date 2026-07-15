@@ -11,7 +11,7 @@ from pewm.processors.utils import (
     read_text,
     write_text,
 )
-from pewm.processors.extractor import extract_entities, load_schemas
+from pewm.processors.extractor import extract_entities, extract_entities_batch, load_schemas
 from pewm.processors.vectorizer import index_documents
 from pewm.processors.database import init_db, mark_inbox_processed, load_processed, get_stats
 
@@ -153,39 +153,59 @@ def run_pipeline(
         print("[info] 00-Inbox 中没有 Markdown 文件。")
         return
 
+    # 收集待处理的文件
+    pending = []
     for path in files:
         rel = str(path.relative_to(ROOT))
         mtime = str(path.stat().st_mtime)
-
         if not reset and not is_unprocessed(path):
             continue
+        pending.append((path, rel, mtime))
 
-        print(f"[process] {rel}")
+    if not pending:
+        print("[info] 没有新的 Inbox 文件需要处理。")
+        return
 
+    print(f"[info] 发现 {len(pending)} 个待处理文件，准备提取...")
+
+    # 批量提取：先尝试一次性 LLM 处理多篇
+    batch_items = []
+    for path, rel, mtime in pending:
         try:
             text = read_text(path)
-            # 可选 OCR 补充
             if not no_ocr:
                 text = _try_ocr(path, text)
-            entities = extract_entities(text, source=rel)
+            batch_items.append((rel, text, mtime, path))
         except Exception as e:
             if skip_errors:
-                print(f"[error] 提取失败（已跳过）: {rel} - {e}")
+                print(f"[error] 读取失败（已跳过）: {rel} - {e}")
                 continue
             raise
 
-        for entity in entities:
-            write_text(entity["path"], entity["content"])
-            print(f"  -> {entity['path'].relative_to(ROOT)}")
-            documents.append({
-                "source": rel,
-                "entity_type": entity["entity_type"],
-                "path": entity["path"],
-                "content": entity["content"],
-            })
+    if batch_items:
+        sources = [item[0] for item in batch_items]
+        print(f"[process] 批量处理：{', '.join(sources)}")
+        batch_results = extract_entities_batch([(s, t) for s, t, m, p in batch_items])
 
-        mark_inbox_processed(rel, mtime)
-        processed_count += 1
+        for idx, (rel, text, mtime, path) in enumerate(batch_items):
+            entities = batch_results[idx] if idx < len(batch_results) else []
+            if not entities:
+                # 批量未返回时单文件兜底
+                entities = extract_entities(text, source=rel)
+
+            print(f"[process] {rel}")
+            for entity in entities:
+                write_text(entity["path"], entity["content"])
+                print(f"  -> {entity['path'].relative_to(ROOT)}")
+                documents.append({
+                    "source": rel,
+                    "entity_type": entity["entity_type"],
+                    "path": entity["path"],
+                    "content": entity["content"],
+                })
+
+            mark_inbox_processed(rel, mtime)
+            processed_count += 1
 
     print(f"[info] 处理完成：{processed_count} 个 Inbox 文件。")
 

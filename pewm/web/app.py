@@ -14,6 +14,9 @@ from flask import Flask, jsonify, request, send_from_directory
 from pewm.paths import ROOT
 from pewm.processors.config_manager import backup_to_dir, export_all, import_from
 from pewm.processors.database import (
+    add_conversation_message,
+    clear_conversation_history,
+    get_conversation_history,
     get_document,
     get_stats,
     hard_delete_document,
@@ -179,6 +182,7 @@ def create_app() -> Flask:
         q = (data.get("q") or "").strip()
         entity_type = data.get("type") or None
         use_rag = data.get("use_rag", True)
+        session_id = (data.get("session_id") or "default").strip()
         if not q:
             return jsonify(success=False, error="问题不能为空"), 400
         try:
@@ -187,6 +191,7 @@ def create_app() -> Flask:
             api_key = cfg.get("api_key") if use_rag else None
             provider = cfg.get("provider") if use_rag else None
             model = cfg.get("model") if use_rag else None
+            history = get_conversation_history(session_id, limit=10)
             result = rag_answer(
                 query=q,
                 entity_type=entity_type or None,
@@ -194,8 +199,31 @@ def create_app() -> Flask:
                 api_key=api_key,
                 provider=provider,
                 model=model,
+                history=history,
             )
+            # 保存用户问题和 AI 回答
+            add_conversation_message(session_id, "user", q)
+            add_conversation_message(session_id, "assistant", result.get("answer", ""))
             return jsonify(success=True, data=result)
+        except Exception as e:
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/chat/history")
+    def api_chat_history():
+        session_id = (request.args.get("session_id") or "default").strip()
+        try:
+            history = get_conversation_history(session_id, limit=100)
+            return jsonify(success=True, data=history)
+        except Exception as e:
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/chat/history/clear", methods=["POST"])
+    def api_chat_history_clear():
+        data = request.get_json() or {}
+        session_id = (data.get("session_id") or "default").strip()
+        try:
+            clear_conversation_history(session_id)
+            return jsonify(success=True, message="对话历史已清空")
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
 
@@ -246,6 +274,30 @@ def create_app() -> Flask:
             "running": _pipeline_logs["running"],
             "output": _pipeline_logs["output"],
         })
+
+    # ========== 后台监听 ==========
+    @app.route("/api/watcher/status")
+    def api_watcher_status():
+        from pewm.processors.watcher import get_watcher
+        w = get_watcher()
+        return jsonify(success=True, data={
+            "running": w.running,
+            "logs": w.get_logs(),
+        })
+
+    @app.route("/api/watcher/start", methods=["POST"])
+    def api_watcher_start():
+        from pewm.processors.watcher import get_watcher
+        w = get_watcher()
+        ok = w.start()
+        return jsonify(success=ok, message="后台监听已启动" if ok else "监听已在运行")
+
+    @app.route("/api/watcher/stop", methods=["POST"])
+    def api_watcher_stop():
+        from pewm.processors.watcher import get_watcher
+        w = get_watcher()
+        ok = w.stop()
+        return jsonify(success=ok, message="后台监听已停止" if ok else "监听未运行")
 
     # ========== OCR 批量 ==========
     @app.route("/api/ocr/run", methods=["POST"])

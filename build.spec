@@ -60,6 +60,7 @@ a = Analysis(
         'pewm.processors.extractor',
         'pewm.processors.vectorizer',
         'pewm.processors.vector_db',
+        'pewm.processors.watcher',
         'pewm.processors.utils',
         'pewm.processors.llm_client',
         'pewm.processors.rag',

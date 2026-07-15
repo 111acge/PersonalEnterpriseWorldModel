@@ -11,6 +11,9 @@ openai>=1.0.0
 # 如未安装则回退到字符 n-gram TF-IDF（精度下降但可运行）
 sentence-transformers>=2.2.0
 
+# 文件监控（可选，用于自动触发 AI 管线）
+watchdog>=3.0
+
 # Git 自动提交（可选）
 gitpython>=3.1.0
 
