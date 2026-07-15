@@ -18,11 +18,14 @@ from pewm.web.splash_controller import SplashController
 
 
 def _resource_path(relative_path):
-    """获取资源路径，兼容 PyInstaller 单文件模式。"""
-    if getattr(sys, "frozen", False):
-        base_path = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-    else:
-        base_path = Path(__file__).resolve().parent
+    """获取资源路径，兼容 PyInstaller 单文件模式。
+
+    无论源码模式还是打包模式，__file__ 都会指向 pewm/web/desktop.py 所在的目录：
+    - 源码：项目根/pewm/web/
+    - 单文件 exe：临时 _MEIPASS/pewm/web/
+    因此直接用 __file__ 的父目录作为基准即可。
+    """
+    base_path = Path(__file__).resolve().parent
     return str(base_path / relative_path)
 
 
