@@ -1,7 +1,0 @@
-fix: 修复 exe 中 splash.html 路径解析错误导致的 404
-
-- 根因：_resource_path 在打包后错误地使用 sys._MEIPASS 作为根目录，
-  而模板实际位于 _MEIPASS/pewm/web/templates/
-- 修复：统一使用 Path(__file__).resolve().parent 作为基准，
-  源码和打包模式下都指向 pewm/web/ 目录
-- 已重新打包 exe 验证通过
