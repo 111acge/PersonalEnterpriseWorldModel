@@ -2,12 +2,16 @@
 
 支持用户身份注入和自定义提示词。
 """
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
+from pewm.processors.log_config import get_logger
+from pewm.processors.metrics import timed
 from pewm.processors.retrieval import hybrid_search
-from pewm.processors.llm_client import chat_completion, load_config
+from pewm.processors.llm_client import chat_completion, chat_completion_stream, load_config
 from pewm.processors.user_profile import load_profile, profile_to_context
 from pewm.processors.prompt_config import render_system_prompt, get_no_result_reply
+
+logger = get_logger(__name__)
 
 
 # RAG 上下文总预算（按字符估算，中文约 1.5 字符/token）
@@ -23,7 +27,7 @@ def _collect_context(
     try:
         return hybrid_search(query, entity_type=entity_type, top_k=top_k, vec_k=top_k * 2)
     except Exception as e:
-        print(f"[rag] 混合检索失败: {e}")
+        logger.warning("混合检索失败: %s", e)
         return []
 
 
@@ -86,6 +90,7 @@ def _build_messages(query: str, context: List[Dict],
     return messages
 
 
+@timed("rag.answer")
 def rag_answer(
     query: str,
     entity_type: Optional[str] = None,
@@ -142,4 +147,56 @@ def rag_answer(
             "answer": f"LLM 调用失败: {e}\n\n（检索到的 {len(context)} 条结果仍可查看）",
             "sources": [c["path"] for c in context],
             "mode": "llm_error",
+        }
+
+
+def rag_answer_stream(
+    query: str,
+    entity_type: Optional[str] = None,
+    top_k: int = 5,
+    api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    history: List[Dict] = None,
+) -> Iterator[Dict]:
+    """RAG 问答流式入口，逐段返回 {"delta": str, "sources": [...], "mode": str, "done": bool}。"""
+    context = _collect_context(query, entity_type=entity_type, top_k=top_k)
+    messages = _build_messages(query, context, history=history)
+
+    cfg = load_config()
+    has_api = bool(api_key or cfg.get("api_key"))
+
+    if not has_api:
+        if not context:
+            no_result_text = get_no_result_reply()
+            yield {"delta": no_result_text, "sources": [], "mode": "no_api", "done": True}
+        else:
+            parts = []
+            for i, c in enumerate(context, 1):
+                preview = c.get("content", "")[:300].replace("\n", " ")
+                score = c.get("rrf_score")
+                score_info = f" [rrf:{score:.4f}]" if score is not None else ""
+                parts.append(f"[{i}]{score_info} {c.get('path', '')}\n    {preview}")
+            answer = "（未配置 LLM API，以下为检索结果原文）\n\n" + "\n\n".join(parts)
+            yield {"delta": answer, "sources": [c["path"] for c in context], "mode": "retrieval_only", "done": True}
+        return
+
+    try:
+        yield {"delta": "", "sources": [c["path"] for c in context], "mode": "rag", "done": False}
+        for delta in chat_completion_stream(
+            messages=messages,
+            temperature=0.3,
+            max_tokens=1500,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+        ):
+            yield {"delta": delta, "sources": [c["path"] for c in context], "mode": "rag", "done": False}
+        yield {"delta": "", "sources": [c["path"] for c in context], "mode": "rag", "done": True}
+    except Exception as e:
+        yield {
+            "delta": f"\n\nLLM 调用失败: {e}\n\n（检索到的 {len(context)} 条结果仍可查看）",
+            "sources": [c["path"] for c in context],
+            "mode": "llm_error",
+            "done": True,
         }

@@ -113,6 +113,34 @@ def chat_completion(
     return resp.choices[0].message.content or ""
 
 
+def chat_completion_stream(
+    messages: List[Dict],
+    temperature: float = 0.3,
+    max_tokens: int = 1024,
+    provider: str = None,
+    api_key: str = None,
+    model: str = None,
+):
+    """调用 LLM 完成对话，以生成器形式逐段返回文本增量。
+
+    Yields: str 文本片段
+    """
+    client = get_client(provider=provider, api_key=api_key)
+    model_name = model or get_model(provider)
+
+    resp = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    for chunk in resp:
+        delta = chunk.choices[0].delta.content or ""
+        if delta:
+            yield delta
+
+
 def test_api(provider: str, api_key: str, base_url: str = None) -> str:
     """测试 API 连通性，返回模型回答。"""
     try:

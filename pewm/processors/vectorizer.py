@@ -36,12 +36,11 @@ def index_documents(documents: List[Dict], build_vector: bool = True) -> None:
     if build_vector:
         try:
             vdb = VectorDB()
-            for doc in documents:
-                vdb.add(
-                    path=str(doc["path"]),
-                    entity_type=doc["entity_type"],
-                    content=doc["content"],
-                )
+            batch = [
+                (str(doc["path"]), doc["entity_type"], doc["content"])
+                for doc in documents
+            ]
+            vdb.add_batch(batch)
             print(f"[info] 已写入 {len(documents)} 个文档到向量库。")
         except Exception as e:
             print(f"[warn] 向量索引失败（不影响 FTS5）: {e}")

@@ -19,11 +19,42 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from pewm.paths import ROOT
+import pewm.paths as paths
+from pewm.processors.log_config import get_logger
+from pewm.processors.metrics import timed
 
-VECTOR_DIR = ROOT / "data" / "vector"
-DB_FILE = VECTOR_DIR / "vectors.db"
-MODEL_CACHE_DIR = VECTOR_DIR / "embedding_model"
+logger = get_logger(__name__)
+
+
+def _vector_dir() -> Path:
+    return paths.ROOT / "data" / "vector"
+
+
+def _db_file() -> Path:
+    return _vector_dir() / "vectors.db"
+
+
+def _model_cache_dir() -> Path:
+    return _vector_dir() / "embedding_model"
+
+
+# 兼容旧代码的模块级别名（惰性解析）
+@property
+def VECTOR_DIR() -> Path:
+    return _vector_dir()
+
+
+@property
+def DB_FILE() -> Path:
+    return _db_file()
+
+
+@property
+def MODEL_CACHE_DIR() -> Path:
+    return _model_cache_dir()
+
+# TF-IDF 模式下固定最大维度，避免新增文档触发全量重建
+_MAX_TFIDF_DIM = 65536
 
 _thread_local = threading.local()
 
@@ -43,8 +74,8 @@ def _db_connection():
     """获取线程本地 SQLite 连接。"""
     conn = getattr(_thread_local, "conn", None)
     if conn is None:
-        VECTOR_DIR.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(DB_FILE))
+        _vector_dir().mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(_db_file()))
         conn.row_factory = sqlite3.Row
         _thread_local.conn = conn
     return conn
@@ -108,7 +139,7 @@ def _load_embedder(download_progress_cb=None):
                 break
 
         if local_path:
-            print(f"[vector] 加载本地 bge 模型：{local_path}")
+            logger.info("加载本地 bge 模型：%s", local_path)
             _EMBEDDER = SentenceTransformer(str(local_path))
             _EMBEDDER_KIND = "transformer"
             if download_progress_cb:
@@ -116,7 +147,8 @@ def _load_embedder(download_progress_cb=None):
             return _EMBEDDER, _EMBEDDER_KIND
 
         # 没有本地模型：在线下载到 MODEL_CACHE_DIR
-        MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_dir = _model_cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
         import threading, time
         EST_TOTAL_MB = 100
 
@@ -125,7 +157,7 @@ def _load_embedder(download_progress_cb=None):
                 return
             while not _load_embedder._done_flag:
                 try:
-                    total_bytes = sum(p.stat().st_size for p in MODEL_CACHE_DIR.rglob("*") if p.is_file())
+                    total_bytes = sum(p.stat().st_size for p in cache_dir.rglob("*") if p.is_file())
                     loaded_mb = round(total_bytes / (1024 * 1024), 1)
                     download_progress_cb(loaded_mb, EST_TOTAL_MB,
                                          f"正在下载 bge-small-zh 模型... {loaded_mb}/{EST_TOTAL_MB} MB")
@@ -144,19 +176,19 @@ def _load_embedder(download_progress_cb=None):
         try:
             _EMBEDDER = SentenceTransformer(
                 "BAAI/bge-small-zh-v1.5",
-                cache_folder=str(MODEL_CACHE_DIR),
+                cache_folder=str(cache_dir),
             )
             _EMBEDDER_KIND = "transformer"
         finally:
             _load_embedder._done_flag = True
             watcher.join(timeout=2)
 
-        print("[vector] 已加载语义 embedding 模型 (transformer)")
+        logger.info("已加载语义 embedding 模型 (transformer)")
         return _EMBEDDER, _EMBEDDER_KIND
     except ImportError:
-        print("[vector] sentence-transformers 未安装，回退到 TF-IDF 模式")
+        logger.info("sentence-transformers 未安装，回退到 TF-IDF 模式")
     except Exception as e:
-        print(f"[vector] 加载 embedding 失败，回退 TF-IDF: {e}")
+        logger.warning("加载 embedding 失败，回退 TF-IDF: %s", e)
 
     _EMBEDDER = None
     _EMBEDDER_KIND = "tfidf"
@@ -202,7 +234,9 @@ def _encode_tfidf(text: str, vocab: Dict[str, int], dim: int) -> np.ndarray:
         tf[g] += 1
     for g, cnt in tf.items():
         if g in vocab:
-            vec[vocab[g]] = float(cnt)
+            idx = vocab[g]
+            if idx < dim:
+                vec[idx] = float(cnt)
     norm = np.linalg.norm(vec)
     if norm > 0:
         vec /= norm
@@ -255,7 +289,15 @@ class VectorDB:
         ).fetchall()
         self.docs = [dict(r) for r in rows]
         if rows:
-            self.vectors = np.stack([np.frombuffer(r["vector"], dtype=np.float32) for r in rows])
+            raw_vectors = [np.frombuffer(r["vector"], dtype=np.float32) for r in rows]
+            max_dim = max((v.shape[0] for v in raw_vectors), default=0)
+            padded = []
+            for v in raw_vectors:
+                if v.shape[0] < max_dim:
+                    pad = np.zeros(max_dim - v.shape[0], dtype=np.float32)
+                    v = np.concatenate([v, pad])
+                padded.append(v)
+            self.vectors = np.stack(padded)
         else:
             self.vectors = None
 
@@ -288,39 +330,43 @@ class VectorDB:
         if not self.vocab:
             self.vocab = _build_tfidf_vocab(texts)
         else:
-            # 增量补充词汇
+            # 增量补充词汇，但不超过最大维度，避免触发全量重建
             for t in texts:
                 for g in _ngrams(t, 2):
-                    if g not in self.vocab:
+                    if g not in self.vocab and len(self.vocab) < _MAX_TFIDF_DIM:
                         self.vocab[g] = len(self.vocab)
-        dim = max(len(self.vocab), 1)
+        dim = max(min(len(self.vocab), _MAX_TFIDF_DIM), 1)
         vecs = np.stack([_encode_tfidf(t, self.vocab, dim) for t in texts])
         # 持久化 vocab 变化
         _set_meta("vocab", self.vocab)
         return vecs
 
+    def _ensure_dim(self, target_dim: int) -> None:
+        """将现有向量矩阵填充到目标维度（用 0 填充），避免全量重建。"""
+        if self.vectors is None or self.vectors.shape[1] >= target_dim:
+            return
+        pad_width = ((0, 0), (0, target_dim - self.vectors.shape[1]))
+        self.vectors = np.pad(self.vectors, pad_width, mode="constant", constant_values=0)
+
+    @timed("vector.add")
     def add(self, path: str, entity_type: str, content: str) -> None:
         """添加或更新一个文档（按 path 去重）。
 
         更新时自动把 deleted_at 置空（如果之前被软删除则恢复）。
+        维度变化时通过零填充增量更新，不触发全量重建。
         """
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
         existing = next((i for i, d in enumerate(self.docs) if d["path"] == path), None)
+        vec = self._encode([content])
+        target_dim = vec.shape[1]
 
         if existing is not None:
             doc = self.docs[existing]
             if doc.get("content_hash") == content_hash and not doc.get("deleted_at"):
                 return  # 内容未变且未删除，跳过
-            vec = self._encode([content])
-            if self.vectors is not None and self.vectors.shape[1] == vec.shape[1]:
+            self._ensure_dim(target_dim)
+            if self.vectors is not None:
                 self.vectors[existing] = vec[0]
-            else:
-                doc["content"] = content
-                doc["content_hash"] = content_hash
-                doc["entity_type"] = entity_type
-                doc["deleted_at"] = ""
-                self._rebuild_all()
-                return
             doc["content"] = content
             doc["content_hash"] = content_hash
             doc["entity_type"] = entity_type
@@ -329,24 +375,11 @@ class VectorDB:
             return
 
         # 新文档
-        vec = self._encode([content])
+        self._ensure_dim(target_dim)
         if self.vectors is None or len(self.vectors) == 0:
             self.vectors = vec
-        elif self.vectors.shape[1] == vec.shape[1]:
-            self.vectors = np.vstack([self.vectors, vec])
         else:
-            # 维度变化，整体重建
-            new_id = max((d["id"] for d in self.docs), default=0) + 1
-            self.docs.append({
-                "id": new_id,
-                "path": path,
-                "entity_type": entity_type,
-                "content": content,
-                "content_hash": content_hash,
-                "deleted_at": "",
-            })
-            self._rebuild_all()
-            return
+            self.vectors = np.vstack([self.vectors, vec])
 
         new_id = max((d["id"] for d in self.docs), default=0) + 1
         self.docs.append({
@@ -358,6 +391,50 @@ class VectorDB:
             "deleted_at": "",
         })
         self._save_doc(path, entity_type, content_hash, content, vec[0], "")
+
+    @timed("vector.add_batch")
+    def add_batch(self, items: List[tuple]) -> None:
+        """批量添加/更新文档，减少重复编码和 SQLite 事务开销。
+
+        items: [(path, entity_type, content), ...]
+        """
+        if not items:
+            return
+        texts = [content for _, _, content in items]
+        vecs = self._encode(texts)
+        target_dim = vecs.shape[1]
+        self._ensure_dim(target_dim)
+
+        conn = _db_connection()
+        for (path, entity_type, content), vec in zip(items, vecs):
+            content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+            existing = next((i for i, d in enumerate(self.docs) if d["path"] == path), None)
+            if existing is not None:
+                doc = self.docs[existing]
+                if doc.get("content_hash") == content_hash and not doc.get("deleted_at"):
+                    continue
+                if self.vectors is not None:
+                    self.vectors[existing] = vec
+                doc["content"] = content
+                doc["content_hash"] = content_hash
+                doc["entity_type"] = entity_type
+                doc["deleted_at"] = ""
+            else:
+                if self.vectors is None or len(self.vectors) == 0:
+                    self.vectors = vec.reshape(1, -1)
+                else:
+                    self.vectors = np.vstack([self.vectors, vec])
+                new_id = max((d["id"] for d in self.docs), default=0) + 1
+                self.docs.append({
+                    "id": new_id,
+                    "path": path,
+                    "entity_type": entity_type,
+                    "content": content,
+                    "content_hash": content_hash,
+                    "deleted_at": "",
+                })
+            self._save_doc(path, entity_type, content_hash, content, vec, "")
+        conn.commit()
 
     def soft_delete(self, path: str) -> bool:
         """软删除：打 deleted_at 标记。向量保留在矩阵中，检索时跳过。"""
@@ -438,6 +515,7 @@ class VectorDB:
         """强制重建全部向量索引。"""
         self._rebuild_all()
 
+    @timed("vector.search")
     def search(self, query: str, entity_type: Optional[str] = None,
                top_k: int = 10) -> List[Dict]:
         """余弦相似度检索。自动跳过软删除的文档。"""

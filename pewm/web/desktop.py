@@ -14,7 +14,11 @@ from pathlib import Path
 
 import webview
 
+from pewm.processors.log_config import get_logger
+from pewm.processors.metrics import timed
 from pewm.web.splash_controller import SplashController
+
+logger = get_logger(__name__)
 
 
 def _resource_path(relative_path):
@@ -37,6 +41,7 @@ def get_version() -> str:
     return "1.0.0"
 
 
+@timed("desktop.start")
 def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
     """启动 Flask + pywebview 桌面应用。"""
     controller = SplashController(version=get_version(), timeout=15.0)
@@ -76,7 +81,7 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
                 window.load_url(url)
                 return True
             except Exception as e:
-                print(f"[desktop] 加载 {url} 失败（{i+1}/{retries}）：{e}")
+                logger.warning("加载 %s 失败（%d/%d）：%s", url, i + 1, retries, e)
                 time.sleep(delay)
         return False
 
@@ -108,7 +113,7 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
 
             # 如果仍停在错误页，再试一次
             if _is_on_error_page():
-                print("[desktop] 检测到错误页，尝试重新加载主界面...")
+                logger.info("检测到错误页，尝试重新加载主界面...")
                 time.sleep(0.5)
                 if not _load_url_with_retry(main_url):
                     raise RuntimeError("主页面二次加载失败")
@@ -122,7 +127,7 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
                 pass
 
         except Exception as e:
-            print(f"[desktop] 切换主界面失败：{e}")
+            logger.error("切换主界面失败：%s", e)
             _load_url_with_retry(_get_error_url())
 
     def go_home():

@@ -3,9 +3,9 @@
 负责在启动画面展示期间执行所有初始化：
 - 读取核心配置
 - 初始化数据库
-- 加载 embedding 模型（可跟踪下载进度）
-- 初始化向量库
+- 初始化向量库（不加载 embedding 模型）
 - 启动 Flask 服务
+- embedding 模型改为延迟加载：进入主界面后在后台预热，或首次检索时加载
 
 通过 js_api 暴露给前端，前端每 100ms 轮询进度。
 """
@@ -15,9 +15,15 @@ import sys
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+
+from pewm.processors.log_config import get_logger
+from pewm.processors.metrics import record, timed
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -47,6 +53,7 @@ class SplashController:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._on_complete: Optional[Callable] = None
+        self._phase_results: dict = {}
 
     def set_window(self, window):
         self._window = window
@@ -77,43 +84,69 @@ class SplashController:
             self.state.status = "加载失败"
 
     def _run_init(self):
-        """分阶段执行初始化。"""
+        """分阶段执行初始化，无依赖阶段并行化。"""
         try:
             self._update(0, "正在读取核心配置...")
-            self._phase_read_config()
+            self._phase_results = {}
+
+            # 阶段 1：可并行化的初始化
+            self._update(5, "正在并行初始化核心服务...")
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                future_config = executor.submit(self._phase_read_config)
+                future_db = executor.submit(self._phase_init_database)
+                future_vec = executor.submit(self._phase_init_vector_db)
+
+                results = {
+                    "config": future_config.result(),
+                    "database": future_db.result(),
+                    "vector_db": future_vec.result(),
+                }
+                self._phase_results.update(results)
+
             if self._stop_event.is_set():
                 return
 
-            self._update(10, "正在初始化数据库...")
-            self._phase_init_database()
-            if self._stop_event.is_set():
-                return
-
-            self._update(25, "正在初始化向量库...")
-            self._phase_init_vector_db()
-            if self._stop_event.is_set():
-                return
-
-            self._update(40, "正在加载语义模型（首次使用需下载约 100MB）...")
-            self._phase_load_embedder()
-            if self._stop_event.is_set():
-                return
-
-            self._update(90, "正在启动本地服务...")
+            self._update(60, "正在启动本地服务...")
             self._phase_start_flask()
+
             if self._stop_event.is_set():
                 return
 
             self._update(100, "加载完成，正在进入主界面...", phase="done")
             if self._on_complete:
                 self._on_complete(self._flask_port)
-            # 等待前端看到 100%，再触发淡出和主界面切换
+            # 启动完成后后台预热 embedding 模型（不阻塞主界面）
+            threading.Thread(target=self._background_warmup, daemon=True).start()
             time.sleep(0.3)
             self._fade_to_main()
         except Exception as e:
             detail = traceback.format_exc()
-            print(f"[splash] 初始化失败：{e}\n{detail}")
+            logger.error("初始化失败：%s\n%s", e, detail)
             self._set_error(f"初始化失败：{e}", detail=detail, can_retry=True)
+            record(
+                "splash.init",
+                duration_ms=int((time.time() - self.state.start_time) * 1000),
+                success=False,
+                error_msg=f"{type(e).__name__}: {e}",
+            )
+
+    def _background_warmup(self):
+        """进入主界面后在后台预热 embedding 模型（可选，不阻塞 UI）。"""
+        try:
+            from pewm.processors.vector_db import _load_embedder
+
+            record("splash.warmup_start")
+            start = time.perf_counter()
+            _load_embedder()
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            record("splash.warmup_done", duration_ms=duration_ms)
+        except Exception as e:
+            record(
+                "splash.warmup_done",
+                success=False,
+                error_msg=f"{type(e).__name__}: {e}",
+            )
+            logger.warning("后台模型预热失败：%s", e)
 
     def _fade_to_main(self):
         """从启动画面淡出，切换到主界面。"""
@@ -124,45 +157,38 @@ class SplashController:
             if self._do_navigate:
                 self._do_navigate()
         except Exception as e:
-            print(f"[splash] 切换主界面失败：{e}")
+            logger.warning("切换主界面失败：%s", e)
 
+    @timed("splash.phase.config")
     def _phase_read_config(self):
         """读取核心配置。"""
         from pewm.processors.llm_client import load_config
         from pewm.processors.ocr_api import load_ocr_config
         from pewm.processors.prompt_config import load_prompt
         from pewm.processors.user_profile import load_profile
+        from pewm.processors.torch_validator import validate_torch_environment
+
         load_config()
         load_ocr_config()
         load_profile()
         load_prompt()
-        time.sleep(0.05)
+        # 启动期完成 torch 环境验证并记录结果
+        validate_torch_environment()
+        return {"ok": True}
 
+    @timed("splash.phase.database")
     def _phase_init_database(self):
         """初始化 SQLite 数据库。"""
         from pewm.processors.database import init_db
         init_db()
-        time.sleep(0.05)
+        return {"ok": True}
 
+    @timed("splash.phase.vector_db")
     def _phase_init_vector_db(self):
-        """初始化向量库。"""
+        """初始化向量库（不加载 embedding 模型）。"""
         from pewm.processors.vector_db import VectorDB
         VectorDB()
-        time.sleep(0.05)
-
-    def _phase_load_embedder(self):
-        """加载 embedding 模型，支持进度回调。"""
-        from pewm.processors.vector_db import _load_embedder
-
-        def progress_cb(loaded, total, msg):
-            if total <= 0:
-                return
-            pct = int(40 + min(loaded / total, 1.0) * 45)
-            self._update(pct, msg or "正在下载模型...")
-
-        _load_embedder(download_progress_cb=progress_cb)
-        self._update(85, "模型加载完成")
-        time.sleep(0.05)
+        return {"ok": True}
 
     def _phase_start_flask(self):
         """启动 Flask 服务。"""
@@ -188,6 +214,7 @@ class SplashController:
                 return
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if s.connect_ex(("127.0.0.1", self._flask_port)) == 0:
+                    record("splash.phase.flask", duration_ms=int((time.time() - self.state.start_time) * 1000))
                     return
             time.sleep(0.05)
         raise RuntimeError("Flask 服务启动超时")
@@ -229,6 +256,29 @@ class SplashController:
             self.state = SplashState(version=self.state.version)
             self.state.start_time = time.time()
         self.start()
+        return {"success": True}
+
+    def minimize_window(self):
+        """最小化窗口。"""
+        try:
+            if self._window:
+                self._window.minimize()
+        except Exception as e:
+            print(f"[splash] 最小化窗口失败：{e}")
+        return {"success": True}
+
+    def maximize_window(self):
+        """最大化/还原窗口。"""
+        try:
+            if self._window:
+                if getattr(self._window, "maximized", False):
+                    self._window.restore()
+                    self._window.maximized = False
+                else:
+                    self._window.maximize()
+                    self._window.maximized = True
+        except Exception as e:
+            print(f"[splash] 最大化窗口失败：{e}")
         return {"success": True}
 
     def close_window(self):

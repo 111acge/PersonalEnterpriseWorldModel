@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 from pewm.paths import ROOT
 from pewm.processors.config_manager import backup_to_dir, export_all, import_from
@@ -27,7 +27,10 @@ from pewm.processors.database import (
 )
 from pewm.processors.llm_client import PROVIDERS, load_config, save_config, test_api
 from pewm.processors.ocr_api import OCR_PROVIDERS, load_ocr_config, save_ocr_config, test_ocr_api
+from pewm.processors.metrics import get_recent, get_summary
 from pewm.processors.prompt_config import PROMPT_FIELDS, get_greeting, load_prompt, save_prompt
+from pewm.processors.retrieval import invalidate_search_cache
+from pewm.processors.torch_validator import get_torch_status
 from pewm.processors.user_profile import load_profile, save_profile
 
 
@@ -57,6 +60,36 @@ def create_app() -> Flask:
         try:
             stats = get_stats()
             return jsonify(success=True, data=stats)
+        except Exception as e:
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/metrics")
+    def api_metrics():
+        event = request.args.get("event") or None
+        limit = int(request.args.get("limit", 100))
+        try:
+            data = get_recent(event=event, limit=limit)
+            return jsonify(success=True, data=data)
+        except Exception as e:
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/metrics/summary")
+    def api_metrics_summary():
+        event = request.args.get("event")
+        limit = int(request.args.get("limit", 100))
+        if not event:
+            return jsonify(success=False, error="缺少 event 参数"), 400
+        try:
+            data = get_summary(event=event, limit=limit)
+            return jsonify(success=True, data=data)
+        except Exception as e:
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/torch/status")
+    def api_torch_status():
+        try:
+            status = get_torch_status()
+            return jsonify(success=True, data=status)
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
 
@@ -126,6 +159,7 @@ def create_app() -> Flask:
             from pewm.processors.vector_db import VectorDB
             vdb = VectorDB()
             n_vec = 1 if vdb.soft_delete(doc_path) else 0
+            invalidate_search_cache()
             return jsonify(success=True, message=f"软删除：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
@@ -137,6 +171,7 @@ def create_app() -> Flask:
             from pewm.processors.vector_db import VectorDB
             vdb = VectorDB()
             n_vec = 1 if vdb.restore(doc_path) else 0
+            invalidate_search_cache()
             return jsonify(success=True, message=f"恢复：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
@@ -148,6 +183,7 @@ def create_app() -> Flask:
             from pewm.processors.vector_db import VectorDB
             vdb = VectorDB()
             n_vec = 1 if vdb.hard_delete(doc_path) else 0
+            invalidate_search_cache()
             return jsonify(success=True, message=f"永久删除：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
@@ -164,6 +200,7 @@ def create_app() -> Flask:
             vdb = VectorDB()
             n_vec = sum(1 for d in vdb.list_docs(include_deleted=True)
                         if d.get("deleted_at") and vdb.hard_delete(d["path"]))
+            invalidate_search_cache()
             return jsonify(success=True, message=f"回收站已清空：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
@@ -215,6 +252,43 @@ def create_app() -> Flask:
             return jsonify(success=True, data=result)
         except Exception as e:
             return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/chat/stream", methods=["POST"])
+    def api_chat_stream():
+        data = request.get_json() or {}
+        q = (data.get("q") or "").strip()
+        entity_type = data.get("type") or None
+        session_id = (data.get("session_id") or "default").strip()
+        if not q:
+            return jsonify(success=False, error="问题不能为空"), 400
+
+        def generate():
+            from pewm.processors.rag import rag_answer_stream
+            cfg = load_config()
+            api_key = cfg.get("api_key")
+            provider = cfg.get("provider")
+            model = cfg.get("model")
+            history = get_conversation_history(session_id, limit=10)
+
+            full_answer = ""
+            for chunk in rag_answer_stream(
+                query=q,
+                entity_type=entity_type or None,
+                top_k=5,
+                api_key=api_key,
+                provider=provider,
+                model=model,
+                history=history,
+            ):
+                delta = chunk.get("delta", "")
+                full_answer += delta
+                import json
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            # 保存对话历史
+            add_conversation_message(session_id, "user", q)
+            add_conversation_message(session_id, "assistant", full_answer)
+
+        return Response(generate(), mimetype="text/event-stream")
 
     @app.route("/api/chat/history")
     def api_chat_history():
@@ -272,6 +346,7 @@ def create_app() -> Flask:
                 sys.stdout = old_stdout
             _pipeline_logs["output"] += output
             _pipeline_logs["running"] = False
+            invalidate_search_cache()
 
         threading.Thread(target=task, daemon=True).start()
         return jsonify(success=True, message="管线已启动")
@@ -345,6 +420,7 @@ def create_app() -> Flask:
                 output = f"向量索引重建失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
+            invalidate_search_cache()
             _pipeline_logs["output"] += output + "\n向量索引重建完成。\n"
 
         threading.Thread(target=task, daemon=True).start()

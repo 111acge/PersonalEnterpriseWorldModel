@@ -1,10 +1,41 @@
 """混合检索：FTS5 关键词 + 向量语义，使用 RRF 重排序 + embedding rerank。"""
-from typing import Dict, List, Optional
+from functools import lru_cache
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from pewm.processors.database import search_documents
+from pewm.processors.log_config import get_logger
+from pewm.processors.metrics import timed
 from pewm.processors.vector_db import VectorDB, _load_embedder
+
+logger = get_logger(__name__)
+
+# 检索结果缓存：最近 128 条查询
+_search_cache = {}
+_MAX_CACHE_SIZE = 128
+
+
+def _cache_key(query: str, entity_type: Optional[str], top_k: int, vec_k: int, rerank: bool) -> Tuple:
+    return (query, entity_type or "", top_k, vec_k, rerank)
+
+
+def _get_cached(key: Tuple):
+    return _search_cache.get(key)
+
+
+def _set_cached(key: Tuple, value: List[Dict]) -> None:
+    if len(_search_cache) >= _MAX_CACHE_SIZE:
+        # 简单 LRU：清空一半
+        keys = list(_search_cache.keys())[: _MAX_CACHE_SIZE // 2]
+        for k in keys:
+            _search_cache.pop(k, None)
+    _search_cache[key] = value
+
+
+def invalidate_search_cache() -> None:
+    """文档增删改后调用，清空检索缓存。"""
+    _search_cache.clear()
 
 
 def _normalize_scores(results: List[Dict], score_key: str = "score",
@@ -92,17 +123,25 @@ def _embedding_rerank(query: str, candidates: List[Dict]) -> List[Dict]:
             r["final_score"] = round(r.get("rerank_score", 0) * 0.7 + r.get("rrf_score", 0) * 0.3, 4)
         candidates.sort(key=lambda x: -x["final_score"])
     except Exception as e:
-        print(f"[retrieval] rerank 失败：{e}")
+        logger.warning("rerank 失败：%s", e)
     return candidates
 
 
+@timed("retrieval.hybrid_search")
 def hybrid_search(query: str, entity_type: Optional[str] = None,
                   top_k: int = 10, vec_k: int = 20, rerank: bool = True) -> List[Dict]:
     """对外暴露的混合检索接口。"""
+    key = _cache_key(query, entity_type, top_k, vec_k, rerank)
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
+
     fts_hits = search_documents(query, entity_type=entity_type, limit=top_k * 2)
     vdb = VectorDB()
     vec_hits = vdb.search(query, entity_type=entity_type, top_k=vec_k)
     fused = reciprocal_rank_fusion(fts_hits, vec_hits, top_k=max(top_k, 20))
     if rerank:
         fused = _embedding_rerank(query, fused)
-    return fused[:top_k]
+    result = fused[:top_k]
+    _set_cached(key, result)
+    return result

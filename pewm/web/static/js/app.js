@@ -10,7 +10,7 @@ const app = {
     init() {
         this.bindNav();
         this.bindTheme();
-        this.bindWindowClose();
+        this.bindWindowControls();
         this.bindChat();
         this.bindSearch();
         this.bindInbox();
@@ -68,16 +68,42 @@ const app = {
         });
     },
 
-    bindWindowClose() {
-        const btn = document.getElementById('window-close');
-        if (!btn) return;
-        btn.addEventListener('click', () => {
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.close_window) {
-                window.pywebview.api.close_window();
-            } else {
-                window.close();
-            }
-        });
+    bindWindowControls() {
+        const minimizeBtn = document.getElementById('window-minimize');
+        const maximizeBtn = document.getElementById('window-maximize');
+        const closeBtn = document.getElementById('window-close');
+        const dragArea = document.getElementById('titlebar-drag');
+
+        const api = window.pywebview && window.pywebview.api;
+
+        if (minimizeBtn) {
+            minimizeBtn.addEventListener('click', () => {
+                if (api && api.minimize_window) api.minimize_window();
+            });
+        }
+
+        if (maximizeBtn) {
+            maximizeBtn.addEventListener('click', () => {
+                if (api && api.maximize_window) api.maximize_window();
+            });
+        }
+
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                if (api && api.close_window) {
+                    api.close_window();
+                } else {
+                    window.close();
+                }
+            });
+        }
+
+        // 标题栏双击最大化/还原
+        if (dragArea) {
+            dragArea.addEventListener('dblclick', () => {
+                if (api && api.maximize_window) api.maximize_window();
+            });
+        }
     },
 
     async api(url, options = {}) {
@@ -187,13 +213,76 @@ const app = {
         const thinking = this.appendChatMessage('assistant', '正在检索并生成回答...');
         this.setLoading('#chat-send', true);
 
+        // 优先尝试 SSE 流式输出，失败则 fallback 到非流式接口
+        const streamOk = await this.sendChatStream(q, type, useRag, sessionId, thinking);
+        if (!streamOk) {
+            await this.sendChatNonStream(q, type, useRag, sessionId, thinking);
+        }
+        this.setLoading('#chat-send', false);
+    },
+
+    async sendChatStream(q, type, useRag, sessionId, thinking) {
+        if (!window.EventSource) return false;
+        try {
+            const resp = await fetch('/api/chat/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ q, type, use_rag: useRag, session_id: sessionId })
+            });
+            if (!resp.ok || !resp.body) return false;
+
+            thinking.remove();
+            const div = this.appendChatMessage('assistant', '');
+            const bubble = div.querySelector('.message-bubble');
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+            let sources = [];
+            let mode = 'rag';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    const dataLine = line.trim();
+                    if (!dataLine.startsWith('data:')) continue;
+                    try {
+                        const chunk = JSON.parse(dataLine.slice(5).trim());
+                        if (chunk.delta) {
+                            bubble.innerHTML = this.escapeHtml((bubble.textContent || '') + chunk.delta);
+                        }
+                        if (chunk.sources) sources = chunk.sources;
+                        if (chunk.mode) mode = chunk.mode;
+                        if (chunk.done) {
+                            if (sources.length) {
+                                const src = document.createElement('div');
+                                src.className = 'message-sources';
+                                src.textContent = '来源：' + sources.slice(0, 5).join('、');
+                                bubble.appendChild(src);
+                            }
+                            return true;
+                        }
+                    } catch (e) {
+                        console.warn('SSE chunk parse error', e);
+                    }
+                }
+            }
+            return true;
+        } catch (e) {
+            console.warn('SSE 流式请求失败，将 fallback', e);
+            return false;
+        }
+    },
+
+    async sendChatNonStream(q, type, useRag, sessionId, thinking) {
         const data = await this.api('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ q, type, use_rag: useRag, session_id: sessionId })
         });
-
-        this.setLoading('#chat-send', false);
         thinking.remove();
         if (data.success) {
             const result = data.data;

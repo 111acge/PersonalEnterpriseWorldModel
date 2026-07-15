@@ -12,6 +12,7 @@ from pewm.processors.utils import (
     write_text,
 )
 from pewm.processors.extractor import extract_entities, extract_entities_batch, load_schemas
+from pewm.processors.metrics import timed
 from pewm.processors.vectorizer import index_documents
 from pewm.processors.database import init_db, mark_inbox_processed, load_processed, get_stats
 
@@ -131,6 +132,7 @@ def _try_ocr(inbox_path: Path, text: str) -> str:
     return text
 
 
+@timed("pipeline.run")
 def run_pipeline(
     reset: bool = False,
     skip_errors: bool = False,

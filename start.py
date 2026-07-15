@@ -17,6 +17,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+# 统一日志配置
+sys.path.insert(0, str(ROOT))
+from pewm.processors.log_config import setup_logging
+
+setup_logging()
+
 
 def _show_fatal_error(msg: str):
     """在控制台显示致命错误。"""
