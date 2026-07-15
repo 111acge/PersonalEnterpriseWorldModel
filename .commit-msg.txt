@@ -1,5 +1,0 @@
-fix: 修复启动画面导致 pywebview 无法启动的问题
-
-- 错误原因：在 webview.start() 之前调用了 splash.destroy()
-- 修复：改用主窗口 loaded 事件关闭启动画面
-- 重新打包 exe 验证通过
