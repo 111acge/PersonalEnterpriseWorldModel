@@ -5,69 +5,327 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PEWM 启动中</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            width: 100vw;
-            height: 100vh;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        #splash {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
             color: white;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-            overflow: hidden;
-            user-select: none;
+            transition: opacity 0.6s ease, transform 0.6s ease;
+            z-index: 100;
         }
-        .logo {
-            width: 72px;
-            height: 72px;
-            background: rgba(255,255,255,0.15);
-            border-radius: 18px;
+
+        #splash.fade-out {
+            opacity: 0;
+            transform: scale(1.02);
+            pointer-events: none;
+        }
+
+        .logo-box {
+            width: 88px;
+            height: 88px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 22px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 24px;
-            font-weight: bold;
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
             margin-bottom: 24px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
         }
-        h1 {
+
+        .app-name {
             font-size: 22px;
             font-weight: 600;
             margin-bottom: 8px;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
         }
-        p {
+
+        .app-version {
+            font-size: 12px;
+            opacity: 0.75;
+            margin-bottom: 36px;
+        }
+
+        .progress-container {
+            width: 280px;
+            max-width: 80%;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: white;
+            border-radius: 3px;
+            transition: width 0.2s ease-out;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
+        }
+
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 10px;
             font-size: 13px;
-            opacity: 0.85;
-            margin-bottom: 32px;
+            opacity: 0.9;
         }
+
+        .status-text {
+            flex: 1;
+            margin-right: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .percent-text {
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+        }
+
         .spinner {
-            width: 36px;
-            height: 36px;
-            border: 3px solid rgba(255,255,255,0.25);
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
             border-top-color: white;
             border-radius: 50%;
-            animation: spin 0.9s linear infinite;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
         }
+
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        .error-panel {
+            display: none;
+            width: 320px;
+            max-width: 85%;
+            background: rgba(220, 38, 38, 0.9);
+            border-radius: 12px;
+            padding: 18px;
+            margin-top: 24px;
+            backdrop-filter: blur(8px);
+            text-align: center;
+            animation: shake 0.4s ease;
+        }
+
+        .error-panel.active {
+            display: block;
+        }
+
+        .error-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .error-detail {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-bottom: 14px;
+            line-height: 1.5;
+            max-height: 80px;
+            overflow: auto;
+            text-align: left;
+        }
+
+        .error-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 8px 18px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: opacity 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+
+        .btn-primary {
+            background: white;
+            color: #4f46e5;
+        }
+
+        .btn-ghost {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-6px); }
+            75% { transform: translateX(6px); }
+        }
+
         .footer {
             position: absolute;
-            bottom: 20px;
+            bottom: 18px;
             font-size: 11px;
-            opacity: 0.6;
+            opacity: 0.55;
         }
     </style>
 </head>
 <body>
-    <div class="logo">PEWM</div>
-    <h1>个人企业世界模型</h1>
-    <p>正在启动本地服务，请稍候...</p>
-    <div class="spinner"></div>
-    <div class="footer">Flask + pywebview</div>
+    <div id="splash">
+        <div class="logo-box">PEWM</div>
+        <div class="app-name">个人企业世界模型</div>
+        <div class="app-version" id="version">版本 1.0.0</div>
+
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-text">
+                <span class="status-text" id="status-text">
+                    <span class="spinner" id="spinner"></span>
+                    正在初始化...
+                </span>
+                <span class="percent-text" id="percent-text">0%</span>
+            </div>
+        </div>
+
+        <div class="error-panel" id="error-panel">
+            <div class="error-title" id="error-title">加载失败</div>
+            <div class="error-detail" id="error-detail"></div>
+            <div class="error-actions">
+                <button class="btn btn-primary" id="retry-btn">重试</button>
+                <button class="btn btn-ghost" id="exit-btn">退出</button>
+            </div>
+        </div>
+
+        <div class="footer">基于 Flask + pywebview</div>
+    </div>
+
+    <script>
+        const splash = document.getElementById('splash');
+        const progressFill = document.getElementById('progress-fill');
+        const statusText = document.getElementById('status-text');
+        const percentText = document.getElementById('percent-text');
+        const spinner = document.getElementById('spinner');
+        const errorPanel = document.getElementById('error-panel');
+        const errorTitle = document.getElementById('error-title');
+        const errorDetail = document.getElementById('error-detail');
+        const retryBtn = document.getElementById('retry-btn');
+        const exitBtn = document.getElementById('exit-btn');
+        const versionEl = document.getElementById('version');
+
+        let navigating = false;
+        let pollTimer = null;
+
+        function setProgress(progress, status) {
+            progressFill.style.width = progress + '%';
+            percentText.textContent = progress + '%';
+            if (status) {
+                statusText.innerHTML = '<span class="spinner"></span> ' + escapeHtml(status);
+            }
+        }
+
+        function showError(title, detail) {
+            spinner.style.display = 'none';
+            errorPanel.classList.add('active');
+            errorTitle.textContent = title;
+            errorDetail.textContent = detail || '';
+            statusText.innerHTML = '加载失败';
+        }
+
+        function hideError() {
+            errorPanel.classList.remove('active');
+            spinner.style.display = 'inline-block';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function poll() {
+            if (navigating || !window.pywebview || !window.pywebview.api) {
+                return;
+            }
+            try {
+                const data = await window.pywebview.api.get_progress();
+                versionEl.textContent = '版本 ' + (data.version || '1.0.0');
+
+                if (data.phase === 'error') {
+                    showError(data.error, data.errorDetail);
+                    return; // 出错后停止轮询，等用户操作
+                }
+
+                if (data.phase === 'done') {
+                    setProgress(100, data.status);
+                    navigating = true;
+                    clearInterval(pollTimer);
+                    // 后端会负责淡出并切换主界面，前端只需保持显示
+                    return;
+                }
+
+                hideError();
+                setProgress(data.progress, data.status);
+            } catch (e) {
+                console.error('poll error', e);
+            }
+        }
+
+        retryBtn.addEventListener('click', () => {
+            hideError();
+            setProgress(0, '正在重试...');
+            window.pywebview.api.retry();
+            if (!pollTimer) {
+                pollTimer = setInterval(poll, 150);
+            }
+        });
+
+        exitBtn.addEventListener('click', () => {
+            window.pywebview.api.exit_app();
+        });
+
+        // 立即开始轮询
+        pollTimer = setInterval(poll, 150);
+        poll();
+    </script>
 </body>
 </html>

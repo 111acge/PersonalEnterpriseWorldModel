@@ -1,98 +1,81 @@
-"""pywebview 桌面启动器（带启动画面）。
+"""pywebview 桌面启动器（带完整启动画面）。
 
-在独立线程中启动 Flask，然后打开一个无边框/原生风格的桌面窗口。
-启动画面会先显示，等主窗口加载完成后再关闭。
+使用单窗口策略：
+1. 窗口先加载 splash.html（本地文件，无需等待 Flask）
+2. splash.html 通过 pywebview.js_api 轮询 SplashController 获取进度
+3. 所有初始化（配置、数据库、模型、Flask）在 SplashController 后台线程执行
+4. 初始化完成后，前端淡出启动界面，通知后端 navigate_to_main
+5. 后端将窗口 load_url 切换到 Flask 主界面
 """
-import logging
-import socket
 import sys
-import threading
-import time
 from pathlib import Path
 
 import webview
 
-
-def find_free_port(start=14725):
-    """找一个可用端口。"""
-    for port in range(start, start + 100):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", port)) != 0:
-                return port
-    raise RuntimeError("找不到可用端口")
-
-
-def _run_flask(app, host, port):
-    """在线程中运行 Flask，关闭日志输出。"""
-    log = logging.getLogger("werkzeug")
-    log.setLevel(logging.ERROR)
-    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+from pewm.web.splash_controller import SplashController
 
 
 def _resource_path(relative_path):
     """获取资源路径，兼容 PyInstaller 单文件模式。"""
     if getattr(sys, "frozen", False):
-        # PyInstaller 单文件运行时会解压到临时 _MEIPASS 目录
         base_path = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     else:
         base_path = Path(__file__).resolve().parent
     return str(base_path / relative_path)
 
 
+def get_version() -> str:
+    """从版本文件或 git tag 读取版本号。"""
+    version_file = Path(__file__).resolve().parents[2] / "VERSION"
+    if version_file.exists():
+        return version_file.read_text(encoding="utf-8").strip()
+    return "1.0.0"
+
+
 def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
     """启动 Flask + pywebview 桌面应用。"""
-    # 先显示启动画面（在重依赖导入之前，给用户即时反馈）
-    splash = webview.create_window(
-        title="PEWM 启动中",
+    controller = SplashController(version=get_version(), timeout=15.0)
+
+    def navigate_to_main():
+        """前端淡出动画结束后调用，切换窗口到主界面。"""
+        try:
+            main_url = f"http://127.0.0.1:{controller._flask_port}/"
+            window.load_url(main_url)
+            # 窗口从启动画面尺寸平滑展开到主界面尺寸
+            try:
+                window.resize(width, height)
+            except Exception:
+                pass
+            try:
+                window.set_title(title)
+            except Exception:
+                pass
+        except Exception as e:
+            controller._set_error(f"切换主界面失败：{e}", can_retry=False)
+
+    controller._do_navigate = navigate_to_main
+
+    window = webview.create_window(
+        title=title,
         url=_resource_path("templates/splash.html"),
-        width=420,
-        height=320,
+        js_api=controller,
+        width=520,
+        height=360,
         frameless=True,
         on_top=True,
         resizable=False,
     )
+    controller.set_window(window)
 
-    # 延迟导入重依赖
-    from pewm.web.app import create_app
+    # 初始化完成后自动切换
+    controller.on_complete(lambda port: None)
 
-    port = find_free_port()
-    app = create_app()
+    # 在 webview 事件循环启动后再开始加载
+    def on_shown():
+        controller.start()
 
-    flask_thread = threading.Thread(
-        target=_run_flask,
-        args=(app, "127.0.0.1", port),
-        daemon=True,
-    )
-    flask_thread.start()
+    window.events.shown += on_shown
 
-    # 等待 Flask 启动
-    for _ in range(100):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                break
-        time.sleep(0.05)
-
-    url = f"http://127.0.0.1:{port}/"
-
-    def on_loaded():
-        """主窗口加载完成后关闭启动画面。"""
-        try:
-            splash.destroy()
-        except Exception as e:
-            print(f"[desktop] 关闭启动画面失败：{e}")
-
-    # 创建主窗口，加载完成后关闭启动画面
-    main_window = webview.create_window(
-        title=title,
-        url=url,
-        width=width,
-        height=height,
-        min_size=(900, 600),
-        text_select=True,
-    )
-    main_window.events.loaded += on_loaded
-
-    # 启动事件循环
     webview.start(debug=False)
 
 
