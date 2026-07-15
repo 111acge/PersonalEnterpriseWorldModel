@@ -4,7 +4,7 @@
 1. 窗口先加载 splash.html（本地文件，无需等待 Flask）
 2. splash.html 通过 pywebview.js_api 轮询 SplashController 获取进度
 3. 所有初始化（配置、数据库、模型、Flask）在 SplashController 后台线程执行
-4. 初始化完成后，前端淡出启动界面，后端将窗口 load_url 切换到 Flask 主界面
+4. 初始化完成后，后端将窗口 load_url 切换到 Flask 主界面
 5. 若主界面加载失败，自动兜底到 /error 页面
 """
 import socket
@@ -46,6 +46,26 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
             return None
         return f"http://127.0.0.1:{port}/"
 
+    def _get_error_url():
+        port = controller._flask_port
+        if not port:
+            return _resource_path("templates/error.html")
+        return f"http://127.0.0.1:{port}/error"
+
+    def _wait_for_flask(port, timeout=5.0):
+        """等待 Flask 服务真正开始监听指定端口。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    if s.connect_ex(("127.0.0.1", port)) == 0:
+                        return True
+            except Exception:
+                pass
+            time.sleep(0.05)
+        return False
+
     def _load_url_with_retry(url, retries=3, delay=0.5):
         """尝试加载 URL，失败时重试。"""
         for i in range(retries):
@@ -57,20 +77,13 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
                 time.sleep(delay)
         return False
 
-    def _verify_page_loaded(timeout=5.0):
-        """验证主页面是否真正加载成功。"""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                result = window.evaluate_js(
-                    "document && document.title && document.title.indexOf('个人企业世界模型') !== -1"
-                )
-                if result:
-                    return True
-            except Exception:
-                pass
-            time.sleep(0.2)
-        return False
+    def _is_on_error_page():
+        """检查当前是否停留在错误页。"""
+        try:
+            href = window.evaluate_js("window.location.href")
+            return href and "/error" in href
+        except Exception:
+            return False
 
     def navigate_to_main():
         """切换到主界面，失败时兜底到 /error。"""
@@ -79,47 +92,35 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
             if not main_url:
                 raise RuntimeError("Flask 端口未初始化")
 
-            # 先确认 Flask 真的在响应
-            ok = False
-            for _ in range(50):
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        if s.connect_ex(("127.0.0.1", controller._flask_port)) == 0:
-                            ok = True
-                            break
-                except Exception:
-                    pass
-                time.sleep(0.05)
-            if not ok:
+            port = controller._flask_port
+            if not _wait_for_flask(port):
                 raise RuntimeError("Flask 服务未就绪")
 
             # 加载主 URL 并调整窗口
             if not _load_url_with_retry(main_url):
                 raise RuntimeError("主页面加载失败")
 
+            # 给页面一点渲染时间
+            time.sleep(0.5)
+
+            # 如果仍停在错误页，再试一次
+            if _is_on_error_page():
+                print("[desktop] 检测到错误页，尝试重新加载主界面...")
+                time.sleep(0.5)
+                if not _load_url_with_retry(main_url):
+                    raise RuntimeError("主页面二次加载失败")
+                time.sleep(0.5)
+                if _is_on_error_page():
+                    raise RuntimeError("主页面确认失败")
+
             try:
                 window.resize(main_width, main_height)
             except Exception:
                 pass
 
-            # 验证页面真的加载了，否则跳转错误页
-            if not _verify_page_loaded(timeout=5.0):
-                raise RuntimeError("主页面验证失败")
-
         except Exception as e:
             print(f"[desktop] 切换主界面失败：{e}")
-            _show_error_page()
-
-    def _show_error_page():
-        """显示错误页（Flask 已启动时使用 /error，否则用本地 error.html）。"""
-        try:
-            if controller._flask_port:
-                error_url = f"http://127.0.0.1:{controller._flask_port}/error"
-                _load_url_with_retry(error_url)
-            else:
-                window.load_url(_resource_path("templates/error.html"))
-        except Exception as e:
-            print(f"[desktop] 显示错误页失败：{e}")
+            _load_url_with_retry(_get_error_url())
 
     def go_home():
         """从错误页返回首页。"""
@@ -127,7 +128,7 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
         if main_url:
             _load_url_with_retry(main_url)
         else:
-            _show_error_page()
+            _load_url_with_retry(_get_error_url())
 
     controller._do_navigate = navigate_to_main
     controller._do_go_home = go_home
