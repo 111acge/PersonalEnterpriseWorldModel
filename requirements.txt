@@ -14,6 +14,10 @@ sentence-transformers>=2.2.0
 # Git 自动提交（可选）
 gitpython>=3.1.0
 
+# Web UI + 桌面壳
+flask>=3.0
+pywebview>=6.0
+
 # 打包成可执行文件（可选）
 pyinstaller>=6.0
 

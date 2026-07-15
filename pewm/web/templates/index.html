@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人企业世界模型</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">PEWM</div>
+                <div class="brand-text">个人企业世界模型</div>
+            </div>
+            <nav class="nav">
+                <a href="#dashboard" class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">🏠</span> 概览
+                </a>
+                <a href="#chat" class="nav-item" data-page="chat">
+                    <span class="nav-icon">💬</span> 对话
+                </a>
+                <a href="#search" class="nav-item" data-page="search">
+                    <span class="nav-icon">🔍</span> 检索
+                </a>
+                <a href="#inbox" class="nav-item" data-page="inbox">
+                    <span class="nav-icon">📝</span> 速记
+                </a>
+                <a href="#documents" class="nav-item" data-page="documents">
+                    <span class="nav-icon">📚</span> 文档管理
+                </a>
+                <a href="#pipeline" class="nav-item" data-page="pipeline">
+                    <span class="nav-icon">⚙️</span> 管线
+                </a>
+                <a href="#settings" class="nav-item" data-page="settings">
+                    <span class="nav-icon">⚙️</span> 设置
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <span id="status-dot" class="status-dot"></span>
+                <span id="status-text">准备就绪</span>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <h1 id="page-title">概览</h1>
+                <button id="theme-toggle" class="btn btn-ghost">🌙</button>
+            </header>
+
+            <div class="content">
+                <!-- 概览页 -->
+                <section id="page-dashboard" class="page active">
+                    <div class="dashboard-grid">
+                        <div class="card stat-card">
+                            <div class="stat-label">已处理 Inbox</div>
+                            <div class="stat-value" id="stat-inbox">-</div>
+                        </div>
+                        <div class="card stat-card">
+                            <div class="stat-label">已索引文档</div>
+                            <div class="stat-value" id="stat-docs">-</div>
+                        </div>
+                        <div class="card stat-card">
+                            <div class="stat-label">回收站</div>
+                            <div class="stat-value" id="stat-deleted">-</div>
+                        </div>
+                    </div>
+                    <div class="card welcome-card">
+                        <h2>欢迎使用</h2>
+                        <p id="greeting-text">正在加载问候语...</p>
+                        <div class="quick-actions">
+                            <button class="btn btn-primary" onclick="app.navigate('inbox')">写速记</button>
+                            <button class="btn btn-primary" onclick="app.navigate('pipeline')">运行 AI 管线</button>
+                            <button class="btn btn-primary" onclick="app.navigate('chat')">开始对话</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 对话页 -->
+                <section id="page-chat" class="page">
+                    <div class="chat-layout">
+                        <div class="card chat-history" id="chat-history"></div>
+                        <div class="chat-input-area">
+                            <div class="chat-filters">
+                                <select id="chat-type" class="input">
+                                    <option value="">全部类型</option>
+                                    <option value="term">术语</option>
+                                    <option value="constant">常量</option>
+                                    <option value="case">案例</option>
+                                    <option value="process">流程</option>
+                                    <option value="system">系统</option>
+                                    <option value="skill">技能</option>
+                                </select>
+                                <label class="checkbox">
+                                    <input type="checkbox" id="chat-use-rag" checked>
+                                    <span>RAG 生成</span>
+                                </label>
+                            </div>
+                            <div class="chat-input-row">
+                                <textarea id="chat-input" class="input" rows="2" placeholder="输入你的问题..."></textarea>
+                                <button class="btn btn-primary" id="chat-send">发送</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 检索页 -->
+                <section id="page-search" class="page">
+                    <div class="card">
+                        <div class="search-row">
+                            <input type="text" id="search-input" class="input" placeholder="输入关键词或问题...">
+                            <select id="search-type" class="input">
+                                <option value="">全部类型</option>
+                                <option value="term">术语</option>
+                                <option value="constant">常量</option>
+                                <option value="case">案例</option>
+                                <option value="process">流程</option>
+                                <option value="system">系统</option>
+                                <option value="skill">技能</option>
+                            </select>
+                            <button class="btn btn-primary" id="search-btn">搜索</button>
+                        </div>
+                        <div id="search-results" class="result-list"></div>
+                    </div>
+                </section>
+
+                <!-- 速记页 -->
+                <section id="page-inbox" class="page">
+                    <div class="card">
+                        <div class="form-group">
+                            <label>标题（可选）</label>
+                            <input type="text" id="inbox-title" class="input" placeholder="笔记标题">
+                        </div>
+                        <div class="form-group">
+                            <label>内容</label>
+                            <textarea id="inbox-content" class="input" rows="12" placeholder="把随手记的内容写在这里..."></textarea>
+                        </div>
+                        <button class="btn btn-primary" id="inbox-save">投递到 Inbox</button>
+                    </div>
+                </section>
+
+                <!-- 文档管理页 -->
+                <section id="page-documents" class="page">
+                    <div class="card">
+                        <div class="doc-toolbar">
+                            <input type="text" id="doc-keyword" class="input" placeholder="搜索文档...">
+                            <select id="doc-type" class="input">
+                                <option value="">全部类型</option>
+                                <option value="term">术语</option>
+                                <option value="constant">常量</option>
+                                <option value="case">案例</option>
+                                <option value="process">流程</option>
+                                <option value="system">系统</option>
+                                <option value="skill">技能</option>
+                            </select>
+                            <label class="checkbox">
+                                <input type="checkbox" id="doc-show-deleted">
+                                <span>显示回收站</span>
+                            </label>
+                            <button class="btn btn-ghost" id="doc-refresh">刷新</button>
+                        </div>
+                        <div class="doc-actions">
+                            <button class="btn btn-warning" id="doc-soft-delete">软删除</button>
+                            <button class="btn btn-primary" id="doc-restore">恢复</button>
+                            <button class="btn btn-danger" id="doc-hard-delete">永久删除</button>
+                            <button class="btn btn-danger" id="doc-purge">清空回收站</button>
+                        </div>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th><input type="checkbox" id="doc-select-all"></th>
+                                    <th>路径</th>
+                                    <th>类型</th>
+                                    <th>更新时间</th>
+                                    <th>状态</th>
+                                    <th>来源</th>
+                                </tr>
+                            </thead>
+                            <tbody id="doc-table-body"></tbody>
+                        </table>
+                        <div class="doc-footer" id="doc-footer"></div>
+                    </div>
+                </section>
+
+                <!-- 管线页 -->
+                <section id="page-pipeline" class="page">
+                    <div class="card pipeline-card">
+                        <div class="pipeline-toolbar">
+                            <button class="btn btn-primary" id="pipeline-run">▶ 运行 AI 管线</button>
+                            <button class="btn btn-primary" id="pipeline-ocr">批量 OCR</button>
+                            <button class="btn btn-primary" id="pipeline-rebuild">重建向量索引</button>
+                            <button class="btn btn-ghost" id="pipeline-refresh">刷新状态</button>
+                        </div>
+                        <div class="pipeline-status" id="pipeline-status">状态：准备就绪</div>
+                        <div class="log-area" id="pipeline-logs"></div>
+                    </div>
+                </section>
+
+                <!-- 设置页 -->
+                <section id="page-settings" class="page">
+                    <div class="settings-tabs">
+                        <button class="settings-tab active" data-settings="llm">LLM API</button>
+                        <button class="settings-tab" data-settings="profile">用户信息</button>
+                        <button class="settings-tab" data-settings="prompt">提示词</button>
+                        <button class="settings-tab" data-settings="ocr">OCR</button>
+                        <button class="settings-tab" data-settings="backup">备份/导入</button>
+                    </div>
+
+                    <div id="settings-llm" class="settings-panel active">
+                        <div class="card">
+                            <div class="form-group">
+                                <label>LLM 提供商</label>
+                                <select id="llm-provider" class="input"></select>
+                            </div>
+                            <div class="form-group">
+                                <label>API Key</label>
+                                <input type="password" id="llm-api-key" class="input">
+                            </div>
+                            <div class="form-group">
+                                <label>Base URL</label>
+                                <input type="text" id="llm-base-url" class="input">
+                            </div>
+                            <div class="form-group">
+                                <label>模型名</label>
+                                <input type="text" id="llm-model" class="input">
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn btn-primary" id="llm-save">保存配置</button>
+                                <button class="btn btn-ghost" id="llm-test">测试连通</button>
+                                <button class="btn btn-ghost" id="llm-clear">清空配置</button>
+                            </div>
+                            <div id="llm-status" class="form-status"></div>
+                        </div>
+                    </div>
+
+                    <div id="settings-profile" class="settings-panel">
+                        <div class="card">
+                            <h3>个人信息</h3>
+                            <div class="form-row" id="profile-personal"></div>
+                            <h3>公司信息</h3>
+                            <div class="form-row" id="profile-company"></div>
+                            <h3>AI 补充背景</h3>
+                            <textarea id="profile-extra" class="input" rows="4"></textarea>
+                            <div class="form-actions">
+                                <button class="btn btn-primary" id="profile-save">保存信息</button>
+                                <button class="btn btn-ghost" id="profile-clear">清空</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="settings-prompt" class="settings-panel">
+                        <div class="card" id="prompt-fields"></div>
+                        <div class="form-actions card">
+                            <button class="btn btn-primary" id="prompt-save">保存提示词</button>
+                        </div>
+                    </div>
+
+                    <div id="settings-ocr" class="settings-panel">
+                        <div class="card">
+                            <div class="form-group">
+                                <label>识别模式</label>
+                                <select id="ocr-mode" class="input">
+                                    <option value="api">API 模式</option>
+                                    <option value="local">本地 PaddleOCR</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>提供商</label>
+                                <select id="ocr-provider" class="input"></select>
+                            </div>
+                            <div id="ocr-credentials"></div>
+                            <div class="form-actions">
+                                <button class="btn btn-primary" id="ocr-save">保存配置</button>
+                                <button class="btn btn-ghost" id="ocr-test">测试连通（API 模式）</button>
+                            </div>
+                            <div id="ocr-status" class="form-status"></div>
+                        </div>
+                    </div>
+
+                    <div id="settings-backup" class="settings-panel">
+                        <div class="card">
+                            <div class="form-group">
+                                <label>导出配置路径</label>
+                                <input type="text" id="backup-export-path" class="input" placeholder="例如：D:\pewm-config.json">
+                                <button class="btn btn-primary" id="backup-export">导出全部配置</button>
+                            </div>
+                            <div class="form-group">
+                                <label>导入配置路径</label>
+                                <input type="text" id="backup-import-path" class="input" placeholder="选择之前导出的 JSON 文件">
+                                <button class="btn btn-primary" id="backup-import">导入配置</button>
+                            </div>
+                            <div class="form-group">
+                                <label>备份目录</label>
+                                <input type="text" id="backup-dir-path" class="input" placeholder="例如：D:\pewm-backup">
+                                <button class="btn btn-primary" id="backup-dir">备份配置目录</button>
+                            </div>
+                            <div id="backup-status" class="form-status"></div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- 文档详情弹窗 -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">文档详情</h3>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre id="modal-body-text"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

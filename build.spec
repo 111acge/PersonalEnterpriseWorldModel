@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置（纯 Python 实现，无需 numpy/sentence-transformers）。
+"""PyInstaller 打包配置（Flask + pywebview 桌面应用）。
 
 Windows 用户安装 PyInstaller 后运行：
     pyinstaller build.spec
@@ -7,9 +7,16 @@ Windows 用户安装 PyInstaller 后运行：
 会在 dist/ 目录下生成可执行文件。
 """
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 import sys
 
 block_cipher = None
+
+# 收集 Flask / pywebview / jinja2 / werkzeug 运行时所需的静态文件和子模块
+flask_datas = collect_data_files('flask')
+webview_datas = collect_data_files('webview')
+webview_submodules = collect_submodules('webview')
+jinja2_datas = collect_data_files('jinja2')
 
 a = Analysis(
     ['start.py'],
@@ -23,19 +30,32 @@ a = Analysis(
         ('40-Skills', '40-Skills'),
         ('90-Meta', '90-Meta'),
         ('pewm', 'pewm'),
+        ('pewm/web/templates', 'pewm/web/templates'),
+        ('pewm/web/static', 'pewm/web/static'),
         ('.env.example', '.'),
         ('requirements.txt', '.'),
         ('bge-model', 'bge-model'),
-    ],
+    ] + flask_datas + webview_datas + jinja2_datas,
     hiddenimports=[
-        # 核心标准库
-        'yaml',
-        'tkinter',
-        'tkinter.ttk',
-        'tkinter.scrolledtext',
-        'tkinter.filedialog',
+        # Flask / Web
+        'flask',
+        'jinja2',
+        'jinja2.ext',
+        'werkzeug',
+        'markupsafe',
+        'itsdangerous',
+        'click',
+        'webview',
+        'webview.util',
+        'webview.platforms',
+        'webview.platforms.winforms',
+        'webview.http',
+        'bottle',
+        'pythonnet',
         # 内部模块
         'pewm.paths',
+        'pewm.web.app',
+        'pewm.web.desktop',
         'pewm.processors.database',
         'pewm.processors.extractor',
         'pewm.processors.vectorizer',
@@ -51,11 +71,6 @@ a = Analysis(
         'pewm.processors.prompt_config',
         'pewm.processors.progress_dialog',
         'pewm.processors.config_manager',
-        # 新 GUI 包
-        'pewm.gui',
-        'pewm.gui.styles',
-        'pewm.gui.tabs',
-        'pewm.gui.app',
         # 外部依赖
         'openai',
         'numpy',
@@ -70,7 +85,7 @@ a = Analysis(
         'tokenizers',
         'huggingface_hub',
         'safetensors',
-    ],
+    ] + webview_submodules,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -1,0 +1,8 @@
+feat: 用 Flask + pywebview 重构 Web UI，替代 tkinter
+
+- 新增 pewm/web/：Flask REST API + H5/CSS/JS SPA 前端 + pywebview 桌面壳
+- 前端页面：概览、对话、检索、速记、文档管理、管线、设置
+- 后端 API 覆盖：LLM/OCR/用户/提示词配置、搜索、RAG、文档管理、管线运行
+- gui.py / start.py 改为启动 pywebview 桌面窗口
+- build.spec 更新：打包 Flask/pywebview 静态资源与隐藏导入
+- requirements.txt 新增 flask、pywebview
