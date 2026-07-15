@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from pewm.paths import ROOT
 from pewm.processors.config_manager import backup_to_dir, export_all, import_from
@@ -42,6 +42,14 @@ def create_app() -> Flask:
     @app.route("/")
     def index():
         return send_from_directory(app.template_folder, "index.html")
+
+    @app.route("/error")
+    def error_page():
+        return send_from_directory(app.template_folder, "error.html")
+
+    @app.errorhandler(404)
+    def not_found(e):
+        return send_from_directory(app.template_folder, "error.html"), 404
 
     # ========== 状态 ==========
     @app.route("/api/stats")

@@ -241,6 +241,12 @@ class SplashController:
             pass
         sys.exit(0)
 
+    def go_home(self):
+        """从错误页返回首页。"""
+        if hasattr(self, "_do_go_home"):
+            self._do_go_home()
+        return {"success": True}
+
     def navigate_to_main(self):
         """前端动画结束后调用，切换到主界面。"""
         # 由 desktop.py 注入实现

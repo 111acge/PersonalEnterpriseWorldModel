@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from pewm.paths import ROOT, DATA_DIR, DB_PATH
+import pewm.paths as paths
 
 
 _thread_local = threading.local()
@@ -25,10 +25,10 @@ def db_connection():
 
     同一线程内复用同一连接，避免频繁 open/close；不同线程各自拥有连接。
     """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    paths.DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = getattr(_thread_local, "conn", None)
     if conn is None:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(paths.DB_PATH))
         conn.row_factory = sqlite3.Row
         _thread_local.conn = conn
     try:
@@ -51,7 +51,7 @@ def _to_rel(path: str) -> str:
     p = Path(path)
     if p.is_absolute():
         try:
-            return str(p.relative_to(ROOT))
+            return str(p.relative_to(paths.ROOT))
         except ValueError:
             pass
     return path
@@ -62,7 +62,7 @@ def _to_abs(path: str) -> Path:
     p = Path(path)
     if p.is_absolute():
         return p
-    return ROOT / p
+    return paths.ROOT / p
 
 
 def init_db() -> None:
@@ -361,7 +361,7 @@ def get_stats() -> Dict:
             "inbox_total": inbox_total,
             "document_count": doc_count,
             "deleted_count": deleted_count,
-            "db_path": str(DB_PATH),
+            "db_path": str(paths.DB_PATH),
         }
 
 

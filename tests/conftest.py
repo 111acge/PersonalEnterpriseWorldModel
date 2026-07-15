@@ -33,7 +33,12 @@ def temp_project(tmp_path):
     pewm.paths.CONFIG_DIR = temp_root / "pewm" / "config"
     pewm.paths.SCHEMAS_DIR = pewm.paths.CONFIG_DIR / "schemas"
 
+    # 关闭可能存在的旧线程连接，确保使用新的 DB_PATH
+    from pewm.processors.database import close_connection
+    close_connection()
+
     yield temp_root
 
     # 清理
+    close_connection()
     shutil.rmtree(temp_root, ignore_errors=True)

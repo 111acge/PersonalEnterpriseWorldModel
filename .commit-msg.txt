@@ -1,0 +1,9 @@
+fix: 修复 404 错误页无法关闭问题，增强启动导航鲁棒性
+
+- 新增 Flask 自定义 404 错误页 error.html，包含返回首页/刷新/关闭按钮
+- desktop.py 增加主界面加载重试、Flask 就绪检测、页面加载验证
+- 导航失败时自动兜底到 /error 页面
+- SplashController 增加 go_home API，供错误页返回首页
+- database.py 使用动态 paths.DB_PATH，修复测试隔离问题
+- 新增 test_web.py：404 页面、弱网超时、重试、go_home 绑定测试
+- 全部 14 个测试通过
