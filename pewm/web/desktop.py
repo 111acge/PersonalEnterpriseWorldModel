@@ -1,10 +1,9 @@
 """pywebview 桌面启动器（带启动画面）。
 
 在独立线程中启动 Flask，然后打开一个无边框/原生风格的桌面窗口。
-启动画面会先显示，等 Flask 服务就绪后再打开主窗口。
+启动画面会先显示，等主窗口加载完成后再关闭。
 """
 import logging
-import os
 import socket
 import sys
 import threading
@@ -75,8 +74,15 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
 
     url = f"http://127.0.0.1:{port}/"
 
-    # 创建主窗口
-    webview.create_window(
+    def on_loaded():
+        """主窗口加载完成后关闭启动画面。"""
+        try:
+            splash.destroy()
+        except Exception as e:
+            print(f"[desktop] 关闭启动画面失败：{e}")
+
+    # 创建主窗口，加载完成后关闭启动画面
+    main_window = webview.create_window(
         title=title,
         url=url,
         width=width,
@@ -84,9 +90,9 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
         min_size=(900, 600),
         text_select=True,
     )
+    main_window.events.loaded += on_loaded
 
-    # 关闭启动画面，然后启动事件循环
-    splash.destroy()
+    # 启动事件循环
     webview.start(debug=False)
 
 
