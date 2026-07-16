@@ -224,6 +224,7 @@
                         <button class="settings-tab" data-settings="prompt">提示词</button>
                         <button class="settings-tab" data-settings="ocr">OCR</button>
                         <button class="settings-tab" data-settings="backup">备份/导入</button>
+                        <button class="settings-tab" data-settings="diagnostics">诊断</button>
                     </div>
 
                     <div id="settings-llm" class="settings-panel active">
@@ -315,6 +316,33 @@
                                 <button class="btn btn-primary" id="backup-dir">备份配置目录</button>
                             </div>
                             <div id="backup-status" class="form-status"></div>
+                        </div>
+                    </div>
+
+                    <div id="settings-diagnostics" class="settings-panel">
+                        <div class="card">
+                            <h3>torch 环境状态</h3>
+                            <div id="torch-status" class="form-status">加载中...</div>
+                        </div>
+                        <div class="card">
+                            <h3>崩溃日志</h3>
+                            <label class="checkbox">
+                                <input type="checkbox" id="crash-reporting-enabled">
+                                <span>允许匿名崩溃上报（预留，当前仅本地记录）</span>
+                            </label>
+                            <div class="form-actions">
+                                <button class="btn btn-primary" id="crash-save">保存设置</button>
+                                <button class="btn btn-ghost" id="crash-view-logs">查看最近崩溃日志</button>
+                            </div>
+                            <div id="crash-status" class="form-status"></div>
+                            <pre id="crash-logs" class="log-area" style="max-height:200px;display:none;"></pre>
+                        </div>
+                        <div class="card">
+                            <h3>性能指标</h3>
+                            <div class="form-actions">
+                                <button class="btn btn-ghost" id="metrics-refresh">刷新指标</button>
+                            </div>
+                            <pre id="metrics-list" class="log-area" style="max-height:300px;"></pre>
                         </div>
                     </div>
                 </section>

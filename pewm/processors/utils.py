@@ -3,14 +3,14 @@ import re
 from pathlib import Path
 from typing import List
 
-from pewm.paths import ROOT, INBOX_DIR, DATA_DIR
+import pewm.paths as paths
 from pewm.processors.database import is_inbox_processed
 
 
 def list_inbox_files() -> List[Path]:
     """列出 00-Inbox 中所有 Markdown 文件（不含 _media）。"""
     files = []
-    for p in INBOX_DIR.rglob("*.md"):
+    for p in paths.INBOX_DIR.rglob("*.md"):
         if "_media" in p.parts:
             continue
         files.append(p)
@@ -19,7 +19,7 @@ def list_inbox_files() -> List[Path]:
 
 def is_unprocessed(path: Path) -> bool:
     """检查文件是否尚未处理或已被修改。"""
-    rel = str(path.relative_to(ROOT))
+    rel = str(path.relative_to(paths.ROOT))
     mtime = str(path.stat().st_mtime)
     return not is_inbox_processed(rel, mtime)
 

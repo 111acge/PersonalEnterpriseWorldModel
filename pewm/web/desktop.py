@@ -14,11 +14,14 @@ from pathlib import Path
 
 import webview
 
+from pewm.processors.crash_handler import install_crash_handler
 from pewm.processors.log_config import get_logger
 from pewm.processors.metrics import timed
 from pewm.web.splash_controller import SplashController
 
 logger = get_logger(__name__)
+
+install_crash_handler()
 
 
 def _resource_path(relative_path):
@@ -69,8 +72,8 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
                     s.settimeout(0.5)
                     if s.connect_ex(("127.0.0.1", port)) == 0:
                         return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("等待 Flask 端口异常：%s", e)
             time.sleep(0.05)
         return False
 
@@ -90,7 +93,8 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
         try:
             href = window.evaluate_js("window.location.href")
             return href and "/error" in href
-        except Exception:
+        except Exception as e:
+            logger.debug("检测错误页异常：%s", e)
             return False
 
     def navigate_to_main():
@@ -123,8 +127,8 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
 
             try:
                 window.resize(main_width, main_height)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("调整窗口大小失败：%s", e)
 
         except Exception as e:
             logger.error("切换主界面失败：%s", e)

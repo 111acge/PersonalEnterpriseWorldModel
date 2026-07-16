@@ -12,6 +12,10 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Optional
 
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class ProgressDialog(tk.Toplevel):
     """通用进度对话框。
@@ -133,6 +137,7 @@ def run_with_progress(parent, title: str, task_fn: Callable,
                     parent.after(0, lambda: on_done(result))
         except Exception as e:
             if not dlg.is_cancelled():
+                logger.exception("进度对话框任务失败")
                 dlg.finish(f"失败：{e}")
                 if on_error:
                     parent.after(0, lambda: on_error(e))

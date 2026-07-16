@@ -15,6 +15,9 @@ from pewm.gui.tabs import (
     SearchTab,
     UserProfileTab,
 )
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def main():
@@ -26,13 +29,13 @@ def main():
 
     try:
         root.iconbitmap("icon.ico")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("加载图标失败：%s", e)
 
     try:
         configure_styles(root)
     except Exception as e:
-        print(f"[gui] 样式配置失败：{e}", file=sys.stderr)
+        logger.warning("样式配置失败：%s", e)
 
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True, padx=8, pady=8)
@@ -48,6 +51,7 @@ def main():
         UserProfileTab(notebook)
         PromptConfigTab(notebook)
     except Exception as e:
+        logger.exception("初始化界面时出错")
         messagebox.showerror("启动错误", f"初始化界面时出错：{e}")
         raise
 

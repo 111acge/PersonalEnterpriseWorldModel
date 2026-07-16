@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Dict
 
 from pewm.processors.llm_client import CONFIG_DIR, load_config, save_config  # 复用同一个配置目录
+from pewm.processors.log_config import get_logger
 
+logger = get_logger(__name__)
 
 PROFILE_FILE = CONFIG_DIR / "profile.json"
 
@@ -45,7 +47,7 @@ def load_profile() -> Dict:
             if isinstance(data, dict):
                 profile.update(data)
         except Exception:
-            pass
+            logger.warning("用户身份信息读取失败，使用默认配置")
     return profile
 
 

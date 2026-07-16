@@ -1,0 +1,12 @@
+{
+  "name": "pewm-web",
+  "version": "1.0.0",
+  "description": "PEWM 前端测试",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0",
+    "vitest": "^1.5.0"
+  }
+}

@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Dict
 
 from pewm.processors.llm_client import CONFIG_DIR
+from pewm.processors.log_config import get_logger
 
+logger = get_logger(__name__)
 
 PROMPT_FILE = CONFIG_DIR / "prompt.json"
 
@@ -64,7 +66,7 @@ def load_prompt() -> Dict:
                     if k in data and isinstance(data[k], str):
                         result[k] = data[k]
         except Exception:
-            pass
+            logger.warning("提示词配置读取失败，使用默认配置")
     return result
 
 

@@ -556,6 +556,73 @@ const app = {
         document.getElementById('backup-export').addEventListener('click', () => this.exportConfig());
         document.getElementById('backup-import').addEventListener('click', () => this.importConfig());
         document.getElementById('backup-dir').addEventListener('click', () => this.backupDir());
+
+        // 诊断面板
+        document.getElementById('crash-save').addEventListener('click', () => this.saveCrashConfig());
+        document.getElementById('crash-view-logs').addEventListener('click', () => this.viewCrashLogs());
+        document.getElementById('metrics-refresh').addEventListener('click', () => this.refreshMetrics());
+        this.loadCrashConfig();
+        this.loadTorchStatus();
+    },
+
+    async loadTorchStatus() {
+        const el = document.getElementById('torch-status');
+        const data = await this.api('/api/torch/status');
+        if (data.success) {
+            const d = data.data;
+            el.textContent = `torch ${d.torch_version || '-'} | 后端: ${d.backend} | bge 模型: ${d.bge_model_files_ok ? '完整' : '缺失'} | 状态: ${d.healthy ? '健康' : '异常'}`;
+            el.style.color = d.healthy ? 'var(--success)' : 'var(--danger)';
+        } else {
+            el.textContent = '获取失败：' + (data.error || '未知错误');
+        }
+    },
+
+    async loadCrashConfig() {
+        const data = await this.api('/api/config/crash');
+        if (data.success) {
+            document.getElementById('crash-reporting-enabled').checked = data.data.crash_reporting_enabled;
+        }
+    },
+
+    async saveCrashConfig() {
+        const enabled = document.getElementById('crash-reporting-enabled').checked;
+        const data = await this.api('/api/config/crash', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crash_reporting_enabled: enabled })
+        });
+        const el = document.getElementById('crash-status');
+        if (data.success) {
+            el.textContent = '已保存';
+            el.style.color = 'var(--success)';
+            this.showToast('崩溃上报设置已保存', 'success');
+        } else {
+            el.textContent = '保存失败：' + (data.error || '');
+            el.style.color = 'var(--danger)';
+        }
+    },
+
+    async viewCrashLogs() {
+        const box = document.getElementById('crash-logs');
+        const data = await this.api('/api/crash/logs');
+        box.style.display = 'block';
+        if (data.success && data.data.length) {
+            box.textContent = data.data.map(l => `=== ${l.file} ===\n${l.content}`).join('\n\n');
+        } else {
+            box.textContent = '暂无崩溃日志。';
+        }
+    },
+
+    async refreshMetrics() {
+        const box = document.getElementById('metrics-list');
+        const data = await this.api('/api/metrics?limit=50');
+        if (data.success && data.data.length) {
+            box.textContent = data.data.map(m =>
+                `${m.created_at} | ${m.event} | ${m.duration_ms ?? '-'}ms | ${m.success ? 'OK' : 'FAIL'}${m.error_msg ? ' | ' + m.error_msg : ''}`
+            ).join('\n');
+        } else {
+            box.textContent = '暂无指标数据。';
+        }
     },
 
     async loadLLMConfig() {

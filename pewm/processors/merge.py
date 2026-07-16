@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from pewm.paths import CONFIG_DIR
+from pewm.processors.log_config import get_logger
 from pewm.processors.utils import load_yaml, now_iso, read_text, write_text
 
+logger = get_logger(__name__)
 
 MERGE_POLICY_FILE = CONFIG_DIR / "merge-policy.yaml"
 
@@ -57,6 +59,7 @@ def _parse_frontmatter(content: str) -> Dict[str, Any]:
         import yaml
         return yaml.safe_load(parts[1]) or {}
     except Exception:
+        logger.warning("YAML frontmatter 解析失败，返回空")
         return {}
 
 
@@ -83,6 +86,7 @@ def _merge_value(old: Any, new: Any, strategy: str, field: str) -> Any:
         try:
             return max(old, new)
         except Exception:
+            logger.warning("max 策略合并失败，field=%s", field)
             return new if new not in (None, "") else old
     # 默认 append
     old_str = "" if old in (None, "") else str(old).strip()

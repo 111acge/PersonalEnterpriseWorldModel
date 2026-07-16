@@ -9,7 +9,6 @@
 
 通过 js_api 暴露给前端，前端每 100ms 轮询进度。
 """
-import logging
 import socket
 import sys
 import threading
@@ -264,7 +263,7 @@ class SplashController:
             if self._window:
                 self._window.minimize()
         except Exception as e:
-            print(f"[splash] 最小化窗口失败：{e}")
+            logger.warning("最小化窗口失败：%s", e)
         return {"success": True}
 
     def maximize_window(self):
@@ -278,7 +277,7 @@ class SplashController:
                     self._window.maximize()
                     self._window.maximized = True
         except Exception as e:
-            print(f"[splash] 最大化窗口失败：{e}")
+            logger.warning("最大化窗口失败：%s", e)
         return {"success": True}
 
     def close_window(self):
@@ -286,8 +285,8 @@ class SplashController:
         try:
             if self._window:
                 self._window.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("关闭窗口失败：%s", e)
         return {"success": True}
 
     def exit_app(self):

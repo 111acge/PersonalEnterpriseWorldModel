@@ -14,15 +14,18 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
-from pewm.paths import ROOT
+import pewm.paths as paths
+from pewm.processors.log_config import get_logger
 from pewm.processors.metrics import record
+
+logger = get_logger(__name__)
 
 
 def _resource_path(*parts: str) -> Path:
     """返回资源文件的绝对路径。兼容源码模式与 PyInstaller 单文件模式。"""
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS).joinpath(*parts)
-    return ROOT.joinpath(*parts)
+    return paths.ROOT.joinpath(*parts)
 
 
 def validate_torch_environment() -> Dict[str, Any]:
@@ -153,5 +156,6 @@ if __name__ == "__main__":
     import json
 
     status = get_torch_status()
+    logger.info("torch 状态：%s", status)
     print(json.dumps(status, ensure_ascii=False, indent=2))
     sys.exit(0 if status["healthy"] else 1)

@@ -57,6 +57,11 @@ ehthumbs.db
 # ===== 日志 =====
 *.log
 pewm/pipeline.log
+logs/
+
+# ===== 前端依赖与覆盖率 =====
+node_modules/
+coverage.json
 
 # ===== 虚拟环境 =====
 .venv/

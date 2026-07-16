@@ -32,6 +32,9 @@ from pewm.processors.prompt_config import PROMPT_FIELDS, get_greeting, load_prom
 from pewm.processors.retrieval import invalidate_search_cache
 from pewm.processors.torch_validator import get_torch_status
 from pewm.processors.user_profile import load_profile, save_profile
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def create_app() -> Flask:
@@ -61,6 +64,7 @@ def create_app() -> Flask:
             stats = get_stats()
             return jsonify(success=True, data=stats)
         except Exception as e:
+            logger.exception("获取统计信息失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/metrics")
@@ -71,6 +75,7 @@ def create_app() -> Flask:
             data = get_recent(event=event, limit=limit)
             return jsonify(success=True, data=data)
         except Exception as e:
+            logger.exception("获取指标失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/metrics/summary")
@@ -83,6 +88,7 @@ def create_app() -> Flask:
             data = get_summary(event=event, limit=limit)
             return jsonify(success=True, data=data)
         except Exception as e:
+            logger.exception("获取指标摘要失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/torch/status")
@@ -91,6 +97,7 @@ def create_app() -> Flask:
             status = get_torch_status()
             return jsonify(success=True, data=status)
         except Exception as e:
+            logger.exception("获取 torch 状态失败")
             return jsonify(success=False, error=str(e)), 500
 
     # ========== Inbox 速记 ==========
@@ -140,6 +147,7 @@ def create_app() -> Flask:
                 ]
             return jsonify(success=True, data=docs)
         except Exception as e:
+            logger.exception("列出文档失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/documents/<path:doc_path>")
@@ -150,6 +158,7 @@ def create_app() -> Flask:
                 return jsonify(success=False, error="文档不存在"), 404
             return jsonify(success=True, data=doc)
         except Exception as e:
+            logger.exception("获取文档详情失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/documents/<path:doc_path>/soft_delete", methods=["POST"])
@@ -162,6 +171,7 @@ def create_app() -> Flask:
             invalidate_search_cache()
             return jsonify(success=True, message=f"软删除：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
+            logger.exception("软删除文档失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/documents/<path:doc_path>/restore", methods=["POST"])
@@ -174,6 +184,7 @@ def create_app() -> Flask:
             invalidate_search_cache()
             return jsonify(success=True, message=f"恢复：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
+            logger.exception("恢复文档失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/documents/<path:doc_path>/hard_delete", methods=["POST"])
@@ -186,6 +197,7 @@ def create_app() -> Flask:
             invalidate_search_cache()
             return jsonify(success=True, message=f"永久删除：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
+            logger.exception("硬删除文档失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/documents/purge", methods=["POST"])
@@ -203,6 +215,7 @@ def create_app() -> Flask:
             invalidate_search_cache()
             return jsonify(success=True, message=f"回收站已清空：FTS5 {n_db} 条，向量库 {n_vec} 条")
         except Exception as e:
+            logger.exception("清空回收站失败")
             return jsonify(success=False, error=str(e)), 500
 
     # ========== 搜索 ==========
@@ -218,6 +231,7 @@ def create_app() -> Flask:
             results = hybrid_search(q, entity_type=entity_type, top_k=top_k)
             return jsonify(success=True, data=results)
         except Exception as e:
+            logger.exception("搜索失败")
             return jsonify(success=False, error=str(e)), 500
 
     # ========== 对话 ==========
@@ -251,6 +265,7 @@ def create_app() -> Flask:
             add_conversation_message(session_id, "assistant", result.get("answer", ""))
             return jsonify(success=True, data=result)
         except Exception as e:
+            logger.exception("对话失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/chat/stream", methods=["POST"])
@@ -297,6 +312,7 @@ def create_app() -> Flask:
             history = get_conversation_history(session_id, limit=100)
             return jsonify(success=True, data=history)
         except Exception as e:
+            logger.exception("获取对话历史失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/chat/history/clear", methods=["POST"])
@@ -307,6 +323,7 @@ def create_app() -> Flask:
             clear_conversation_history(session_id)
             return jsonify(success=True, message="对话历史已清空")
         except Exception as e:
+            logger.exception("清空对话历史失败")
             return jsonify(success=False, error=str(e)), 500
 
     # ========== 管线 ==========
@@ -341,6 +358,7 @@ def create_app() -> Flask:
                 runpy.run_path(str(ROOT / "run.py"), run_name="__main__")
                 output = buffer.getvalue()
             except Exception as e:
+                logger.exception("管线运行失败")
                 output = f"管线运行失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
@@ -396,6 +414,7 @@ def create_app() -> Flask:
                 lines = [f"- {img.name}: {text[:80].replace(chr(10), ' ')}" for img, text in results.items()]
                 _pipeline_logs["output"] += f"已识别 {len(results)} 张图片：\n" + "\n".join(lines) + "\n"
             except Exception as e:
+                logger.exception("批量 OCR 失败")
                 _pipeline_logs["output"] += f"批量 OCR 失败：{e}\n"
 
         threading.Thread(target=task, daemon=True).start()
@@ -417,6 +436,7 @@ def create_app() -> Flask:
                 do_rebuild()
                 output = buffer.getvalue()
             except Exception as e:
+                logger.exception("向量索引重建失败")
                 output = f"向量索引重建失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
@@ -458,6 +478,7 @@ def create_app() -> Flask:
             result = test_api(provider, api_key, base_url)
             return jsonify(success=True, message=result)
         except Exception as e:
+            logger.exception("LLM API 测试失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/config/providers")
@@ -489,6 +510,7 @@ def create_app() -> Flask:
             result = test_ocr_api(provider, credentials)
             return jsonify(success=True, message=result)
         except Exception as e:
+            logger.exception("OCR API 测试失败")
             return jsonify(success=False, error=str(e)), 500
 
     @app.route("/api/config/ocr/providers")
@@ -548,6 +570,38 @@ def create_app() -> Flask:
             return jsonify(success=False, error="缺少备份目录"), 400
         ok, msg = backup_to_dir(Path(path))
         return jsonify(success=ok, message=msg)
+
+    # ========== 崩溃上报 ==========
+    @app.route("/api/config/crash")
+    def api_config_crash():
+        cfg = load_config()
+        return jsonify(success=True, data={
+            "crash_reporting_enabled": bool(cfg.get("crash_reporting_enabled", False))
+        })
+
+    @app.route("/api/config/crash", methods=["POST"])
+    def api_config_crash_save():
+        data = request.get_json() or {}
+        cfg = load_config()
+        cfg["crash_reporting_enabled"] = bool(data.get("crash_reporting_enabled", False))
+        save_config(cfg)
+        return jsonify(success=True, message="崩溃上报设置已保存")
+
+    @app.route("/api/crash/logs")
+    def api_crash_logs():
+        try:
+            from pewm.processors.crash_handler import get_recent_crash_logs
+            from pathlib import Path as _P
+            logs = []
+            for p in get_recent_crash_logs(limit=5):
+                try:
+                    logs.append({"file": _P(p).name, "content": _P(p).read_text(encoding="utf-8")})
+                except Exception:
+                    logs.append({"file": _P(p).name, "content": "(读取失败)"})
+            return jsonify(success=True, data=logs)
+        except Exception as e:
+            logger.exception("读取崩溃日志失败")
+            return jsonify(success=False, error=str(e)), 500
 
     # ========== 问候语 ==========
     @app.route("/api/greeting")

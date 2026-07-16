@@ -7,6 +7,10 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from openai import OpenAI
 except ImportError:
@@ -45,7 +49,7 @@ def load_config() -> Dict:
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logger.warning("读取配置文件失败，使用默认配置")
     return {"provider": "", "api_key": "", "model": "", "base_url": ""}
 
 
@@ -155,4 +159,5 @@ def test_api(provider: str, api_key: str, base_url: str = None) -> str:
         )
         return "OK: " + (resp.choices[0].message.content or "").strip()
     except Exception as e:
+        logger.warning("API 测试失败：%s", e)
         return f"ERROR: {e}"

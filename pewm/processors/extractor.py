@@ -11,12 +11,13 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from pewm.paths import CONFIG_DIR, ROOT, SCHEMAS_DIR
+import pewm.paths as paths
+from pewm.processors.log_config import get_logger
 from pewm.processors.merge import merge_entity
 from pewm.processors.utils import load_yaml, now_iso, sanitize_filename
 from pewm.processors.llm_client import chat_completion, load_config
 
-EXTRACTION_RULES = CONFIG_DIR / "extraction-rules.yaml"
+logger = get_logger(__name__)
 
 
 class ExtractedEntity(BaseModel):
@@ -29,7 +30,7 @@ class ExtractedEntity(BaseModel):
 
 def load_schemas() -> Dict[str, Dict[str, Any]]:
     schemas = {}
-    for p in SCHEMAS_DIR.glob("*.yaml"):
+    for p in paths.SCHEMAS_DIR.glob("*.yaml"):
         data = load_yaml(p)
         if data and "entity_type" in data:
             schemas[data["entity_type"]] = data
@@ -37,7 +38,7 @@ def load_schemas() -> Dict[str, Dict[str, Any]]:
 
 
 def load_rules() -> List[Dict[str, Any]]:
-    data = load_yaml(EXTRACTION_RULES)
+    data = load_yaml(paths.CONFIG_DIR / "extraction-rules.yaml")
     return data.get("rules", [])
 
 
@@ -166,7 +167,7 @@ def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> 
             max_tokens=2500,
         )
     except Exception as e:
-        print(f"[extractor] LLM 调用失败：{e}")
+        logger.warning("LLM 调用失败：%s", e)
         return []
 
     return _parse_and_validate_llm_json(response, schemas)
@@ -209,7 +210,7 @@ def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -
             max_tokens=4000,
         )
     except Exception as e:
-        print(f"[extractor] 批量 LLM 调用失败：{e}")
+        logger.warning("批量 LLM 调用失败：%s", e)
         return [[] for _ in items]
 
     raw_items = _parse_and_validate_llm_json(response, schemas)
@@ -231,15 +232,15 @@ def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) 
     start = text.find("[")
     end = text.rfind("]")
     if start == -1 or end == -1:
-        print("[extractor] LLM 响应中没有 JSON 数组")
+        logger.warning("LLM 响应中没有 JSON 数组")
         return []
     try:
         raw_items = json.loads(text[start:end + 1])
     except json.JSONDecodeError as e:
-        print(f"[extractor] JSON 解析失败：{e}")
+        logger.warning("JSON 解析失败：%s", e)
         return []
     if not isinstance(raw_items, list):
-        print("[extractor] LLM 返回的不是数组")
+        logger.warning("LLM 返回的不是数组")
         return []
 
     valid_items = []
@@ -249,12 +250,12 @@ def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) 
         try:
             ExtractedEntity.model_validate(item)
         except ValidationError as e:
-            print(f"[extractor] 实体校验失败：{e}")
+            logger.warning("实体校验失败：%s", e)
             continue
 
         etype = item.get("entity_type")
         if etype not in schemas:
-            print(f"[extractor] 未知实体类型：{etype}")
+            logger.warning("未知实体类型：%s", etype)
             continue
 
         # 必填字段校验
@@ -266,7 +267,7 @@ def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) 
         if not any(item.get(f) for f in identity_fields):
             missing.append("identity_field")
         if missing:
-            print(f"[extractor] 实体 {etype} 缺少字段：{missing}，跳过")
+            logger.warning("实体 %s 缺少字段：%s，跳过", etype, missing)
             continue
 
         valid_items.append(item)
@@ -313,21 +314,21 @@ def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
             if c:
                 converted.append(c)
         if converted:
-            print(f"  [llm] 提取到 {len(converted)} 个实体")
+            logger.info("[llm] 提取到 %d 个实体", len(converted))
             return converted
 
     # 2. 兜底：基于触发词的规则提取
     rules = load_rules()
     entities = _rule_extract(text, source, rules, schemas)
     if entities:
-        print(f"  [rule] 提取到 {len(entities)} 个实体（LLM 未返回）")
+        logger.info("[rule] 提取到 %d 个实体（LLM 未返回）", len(entities))
         return entities
 
     # 3. 终极兜底：整篇作为 note
     if "note" in schemas and text.strip():
         note = build_note_entity(text, source, schemas["note"])
         if note:
-            print(f"  [fallback] 整篇存为 note")
+            logger.info("[fallback] 整篇存为 note")
             return [note]
     return []
 
@@ -356,7 +357,7 @@ def extract_entities_batch(items: List[tuple]) -> List[List[Dict[str, Any]]]:
                     if c:
                         converted.append(c)
                 if converted:
-                    print(f"  [llm-batch] {source} 提取到 {len(converted)} 个实体")
+                    logger.info("[llm-batch] %s 提取到 %d 个实体", source, len(converted))
                     results.append(converted)
                     continue
             # 单个文件 fallback
@@ -407,7 +408,7 @@ def _llm_item_to_entity(item: Dict[str, Any], schemas: Dict[str, Dict[str, Any]]
         name = "untitled"
     filename = sanitize_filename(name) + ".md"
 
-    output_path = Path(ROOT) / schema["storage_path"] / filename
+    output_path = Path(paths.ROOT) / schema["storage_path"] / filename
     template = schema.get("content_template", "")
 
     merged = merge_entity(output_path, context, etype, template, render_template, schema=schema)
@@ -480,7 +481,7 @@ def build_entity(rule: Dict[str, Any], sentence: str, full_text: str,
         return None
 
     template = schema["content_template"]
-    output_path = Path(ROOT) / target / filename
+    output_path = Path(paths.ROOT) / target / filename
     merged = merge_entity(output_path, context, entity_type, template, render_template, schema=schema)
     merged["frontmatter"] = context
     return merged
@@ -515,7 +516,7 @@ def build_note_entity(text: str, source: str, schema: Dict[str, Any]) -> Optiona
     }
     template = schema["content_template"]
     filename = sanitize_filename(title) + ".md"
-    output_path = Path(ROOT) / schema["storage_path"] / filename
+    output_path = Path(paths.ROOT) / schema["storage_path"] / filename
     merged = merge_entity(output_path, context, "note", template, render_template, schema=schema)
     merged["frontmatter"] = context
     return merged

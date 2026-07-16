@@ -1,0 +1,21 @@
+[run]
+omit =
+    pewm/gui/*
+    pewm/web/desktop.py
+    pewm/processors/progress_dialog.py
+    pewm/processors/watcher.py
+    tests/*
+    */__init__.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    pass
+    except ImportError
+    logger.debug
+    logger.warning
+    # noqa

@@ -27,7 +27,9 @@ def test_validate_torch_environment_detects_missing_bge_model(temp_project):
     except ImportError:
         pytest.skip("当前环境未安装 torch，跳过 bge 文件完整性测试")
 
-    bge_path = temp_project / "bge-model"
+    from pewm.processors.torch_validator import _resource_path
+
+    bge_path = _resource_path("bge-model")
     # 临时移走关键文件
     config_file = bge_path / "config.json"
     backup = None

@@ -67,7 +67,7 @@ def _resource_path(*parts: str) -> Path:
     """返回资源文件的绝对路径。PyInstaller 打包后从 sys._MEIPASS 解析，源码模式从 ROOT 解析。"""
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS).joinpath(*parts)
-    return ROOT.joinpath(*parts)
+    return paths.ROOT.joinpath(*parts)
 
 
 def _db_connection():
@@ -162,6 +162,7 @@ def _load_embedder(download_progress_cb=None):
                     download_progress_cb(loaded_mb, EST_TOTAL_MB,
                                          f"正在下载 bge-small-zh 模型... {loaded_mb}/{EST_TOTAL_MB} MB")
                 except Exception:
+                    # 进度回调失败不应阻塞下载
                     pass
                 time.sleep(0.5)
             if download_progress_cb:
@@ -251,6 +252,7 @@ def _get_meta(key: str, default=None):
     try:
         return json.loads(row["value"])
     except Exception:
+        # 旧数据可能是纯字符串，直接返回
         return row["value"]
 
 

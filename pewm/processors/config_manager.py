@@ -18,9 +18,11 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from pewm.processors.llm_client import CONFIG_DIR, load_config, save_config
+from pewm.processors.log_config import get_logger
 from pewm.processors.user_profile import load_profile, save_profile, PROFILE_FILE
 from pewm.processors.prompt_config import load_prompt, save_prompt, PROMPT_FILE
 
+logger = get_logger(__name__)
 
 EXPORT_VERSION = 1
 
@@ -65,6 +67,7 @@ def export_all(dest_path: Path, include_api_keys: bool = True) -> Tuple[bool, st
         )
         return True, f"已导出到：{dest_path}"
     except Exception as e:
+        logger.warning("配置导出失败：%s", e)
         return False, f"导出失败：{e}"
 
 
@@ -82,6 +85,7 @@ def import_from(src_path: Path, overwrite: bool = True) -> Tuple[bool, str]:
         raw = src_path.read_text(encoding="utf-8")
         payload = json.loads(raw)
     except Exception as e:
+        logger.warning("读取导入文件失败：%s", e)
         return False, f"读取文件失败：{e}"
 
     if not isinstance(payload, dict) or payload.get("app") != "个人企业世界模型":
@@ -138,6 +142,7 @@ def import_from(src_path: Path, overwrite: bool = True) -> Tuple[bool, str]:
         exported_at = payload.get("exported_at", "?")
         return True, f"导入成功（导出时间：{exported_at}）"
     except Exception as e:
+        logger.warning("配置导入失败：%s", e)
         return False, f"导入失败：{e}"
 
 
@@ -150,4 +155,5 @@ def backup_to_dir(dest_dir: Path) -> Tuple[bool, str]:
             return True, f"已备份到：{dest_dir}"
         return False, "配置目录不存在，无需备份"
     except Exception as e:
+        logger.warning("配置备份失败：%s", e)
         return False, f"备份失败：{e}"

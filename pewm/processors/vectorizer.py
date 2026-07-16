@@ -2,7 +2,10 @@
 from typing import Dict, List
 
 from pewm.processors.database import add_document, db_connection
+from pewm.processors.log_config import get_logger
 from pewm.processors.vector_db import VectorDB
+
+logger = get_logger(__name__)
 
 
 def extract_title(content: str) -> str:
@@ -17,7 +20,7 @@ def extract_title(content: str) -> str:
 def index_documents(documents: List[Dict], build_vector: bool = True) -> None:
     """将文档同时索引到 SQLite FTS5 和向量库。"""
     if not documents:
-        print("[info] 没有文档需要索引。")
+        logger.info("没有文档需要索引。")
         return
 
     # 1. FTS5 索引
@@ -30,7 +33,7 @@ def index_documents(documents: List[Dict], build_vector: bool = True) -> None:
             source=doc["source"],
             path=str(doc["path"]),
         )
-    print(f"[info] 已索引 {len(documents)} 个文档到 SQLite FTS5。")
+    logger.info("已索引 %d 个文档到 SQLite FTS5。", len(documents))
 
     # 2. 向量索引（可选，首次运行会下载 embedding 模型）
     if build_vector:
@@ -41,9 +44,9 @@ def index_documents(documents: List[Dict], build_vector: bool = True) -> None:
                 for doc in documents
             ]
             vdb.add_batch(batch)
-            print(f"[info] 已写入 {len(documents)} 个文档到向量库。")
+            logger.info("已写入 %d 个文档到向量库。", len(documents))
         except Exception as e:
-            print(f"[warn] 向量索引失败（不影响 FTS5）: {e}")
+            logger.warning("向量索引失败（不影响 FTS5）: %s", e)
 
 
 def rebuild_vector() -> None:
@@ -61,4 +64,4 @@ def rebuild_vector() -> None:
             entity_type=row["entity_type"],
             content=row["content"],
         )
-    print(f"[info] 已重建 {len(rows)} 条向量索引。")
+    logger.info("已重建 %d 条向量索引。", len(rows))

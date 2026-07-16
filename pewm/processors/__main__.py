@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict
 
-from pewm.paths import ROOT, INBOX_DIR
+import pewm.paths as paths
 from pewm.processors.utils import (
     list_inbox_files,
     is_unprocessed,
@@ -12,9 +12,15 @@ from pewm.processors.utils import (
     write_text,
 )
 from pewm.processors.extractor import extract_entities, extract_entities_batch, load_schemas
+from pewm.processors.log_config import get_logger
 from pewm.processors.metrics import timed
 from pewm.processors.vectorizer import index_documents
 from pewm.processors.database import init_db, mark_inbox_processed, load_processed, get_stats
+
+logger = get_logger(__name__)
+
+ROOT = paths.ROOT
+INBOX_DIR = paths.INBOX_DIR
 
 
 def reconcile() -> Dict[str, int]:
@@ -71,7 +77,7 @@ def reconcile() -> Dict[str, int]:
         if not _path_still_exists(d["path"]):
             if soft_delete_document(d["path"]):
                 db_count += 1
-                print(f"  [soft-delete] {d['path']}")
+                logger.info("[soft-delete] %s", d["path"])
 
     # 向量库同步
     vdb = VectorDB()
@@ -128,7 +134,7 @@ def _try_ocr(inbox_path: Path, text: str) -> str:
         if ocr_text:
             return text + "\n\n## 来自图片的补充内容\n\n" + ocr_text
     except Exception as e:
-        print(f"[warn] OCR 处理失败: {e}")
+        logger.warning("OCR 处理失败: %s", e)
     return text
 
 
@@ -140,7 +146,7 @@ def run_pipeline(
     no_vector: bool = False,
     no_ocr: bool = False,
 ):
-    print(f"[info] 启动 AI 管线：{ROOT}")
+    logger.info("启动 AI 管线：%s", ROOT)
     # 立即初始化数据库，确保 data/ 目录和表始终被创建
     init_db()
     from pewm.paths import DATA_DIR
@@ -152,7 +158,7 @@ def run_pipeline(
 
     files = list_inbox_files()
     if not files:
-        print("[info] 00-Inbox 中没有 Markdown 文件。")
+        logger.info("00-Inbox 中没有 Markdown 文件。")
         return
 
     # 收集待处理的文件
@@ -165,10 +171,10 @@ def run_pipeline(
         pending.append((path, rel, mtime))
 
     if not pending:
-        print("[info] 没有新的 Inbox 文件需要处理。")
+        logger.info("没有新的 Inbox 文件需要处理。")
         return
 
-    print(f"[info] 发现 {len(pending)} 个待处理文件，准备提取...")
+    logger.info("发现 %d 个待处理文件，准备提取...", len(pending))
 
     # 批量提取：先尝试一次性 LLM 处理多篇
     batch_items = []
@@ -180,13 +186,13 @@ def run_pipeline(
             batch_items.append((rel, text, mtime, path))
         except Exception as e:
             if skip_errors:
-                print(f"[error] 读取失败（已跳过）: {rel} - {e}")
+                logger.error("读取失败（已跳过）: %s - %s", rel, e)
                 continue
             raise
 
     if batch_items:
         sources = [item[0] for item in batch_items]
-        print(f"[process] 批量处理：{', '.join(sources)}")
+        logger.info("批量处理：%s", ", ".join(sources))
         batch_results = extract_entities_batch([(s, t) for s, t, m, p in batch_items])
 
         for idx, (rel, text, mtime, path) in enumerate(batch_items):
@@ -195,10 +201,10 @@ def run_pipeline(
                 # 批量未返回时单文件兜底
                 entities = extract_entities(text, source=rel)
 
-            print(f"[process] {rel}")
+            logger.info("[process] %s", rel)
             for entity in entities:
                 write_text(entity["path"], entity["content"])
-                print(f"  -> {entity['path'].relative_to(ROOT)}")
+                logger.info("  -> %s", entity["path"].relative_to(ROOT))
                 documents.append({
                     "source": rel,
                     "entity_type": entity["entity_type"],
@@ -209,7 +215,7 @@ def run_pipeline(
             mark_inbox_processed(rel, mtime)
             processed_count += 1
 
-    print(f"[info] 处理完成：{processed_count} 个 Inbox 文件。")
+    logger.info("处理完成：%d 个 Inbox 文件。", processed_count)
 
     # SQLite FTS5 + 向量索引
     index_documents(documents, build_vector=not no_vector)
@@ -217,7 +223,7 @@ def run_pipeline(
     # 自动清理：把磁盘上已不存在的文档软删除
     orphan = reconcile()
     if orphan["database"] or orphan["vector"]:
-        print(f"[info] 自动清理：FTS5 软删除 {orphan['database']} 条，向量库软删除 {orphan['vector']} 条。")
+        logger.info("自动清理：FTS5 软删除 %d 条，向量库软删除 %d 条。", orphan["database"], orphan["vector"])
 
     # Git 提交
     if not no_git and (processed_count > 0 or reset):
@@ -234,9 +240,9 @@ def git_commit():
             check=False,
         )
     except FileNotFoundError:
-        print("[warn] 未找到 git，跳过自动提交。")
+        logger.warning("未找到 git，跳过自动提交。")
     except subprocess.CalledProcessError as e:
-        print(f"[warn] Git 提交失败：{e}")
+        logger.warning("Git 提交失败：%s", e)
 
 
 def show_status():
@@ -259,14 +265,14 @@ def show_status():
             vs = VectorDB().stats()
             vec_status = f"{vs['doc_count']} 条 / {vs['kind']} / {vs['dim']}维"
         except Exception as e:
-            vec_status = f"读取失败: {e}"
+            logger.warning("读取向量库状态失败: %s", e)
 
-    print(f"[status] Inbox 文件总数：{len(files)}")
-    print(f"[status] 待处理文件数：{pending}")
-    print(f"[status] 已索引文档数：{stats['document_count']}")
-    print(f"[status] 软删除文档数：{stats.get('deleted_count', 0)}")
-    print(f"[status] 向量库状态：{vec_status}")
-    print(f"[status] 数据库：{stats['db_path']}")
+    logger.info("[status] Inbox 文件总数：%d", len(files))
+    logger.info("[status] 待处理文件数：%d", pending)
+    logger.info("[status] 已索引文档数：%d", stats['document_count'])
+    logger.info("[status] 软删除文档数：%d", stats.get('deleted_count', 0))
+    logger.info("[status] 向量库状态：%s", vec_status)
+    logger.info("[status] 数据库：%s", stats['db_path'])
 
 
 def main():
@@ -289,10 +295,10 @@ def main():
         rebuild_vector()
     elif args.reconcile:
         result = reconcile()
-        print(f"[info] reconcile 完成：FTS5 {result['database']} 条，向量库 {result['vector']} 条")
+        logger.info("reconcile 完成：FTS5 %d 条，向量库 %d 条", result['database'], result['vector'])
     elif args.purge:
         result = purge_orphans()
-        print(f"[info] purge 完成：FTS5 永久删除 {result['database']} 条，向量库永久删除 {result['vector']} 条")
+        logger.info("purge 完成：FTS5 永久删除 %d 条，向量库永久删除 %d 条", result['database'], result['vector'])
     else:
         run_pipeline(
             reset=args.reset,

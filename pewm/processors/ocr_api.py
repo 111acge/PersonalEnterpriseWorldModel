@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from pewm.processors.llm_client import CONFIG_DIR, load_config, save_config
+from pewm.processors.log_config import get_logger
 
+logger = get_logger(__name__)
 
 # 每家提供商的配置模板
 OCR_PROVIDERS = {
@@ -72,8 +74,9 @@ def _http_post(url: str, data: Dict, headers: Optional[Dict] = None,
         raw = resp.read().decode("utf-8")
         try:
             return json.loads(raw)
-        except Exception:
-            raise RuntimeError(f"OCR API 返回非 JSON: {raw[:200]}")
+        except Exception as e:
+            logger.warning("OCR API 返回非 JSON: %s", raw[:200])
+            raise RuntimeError(f"OCR API 返回非 JSON: {raw[:200]}") from e
 
 
 # ========== 百度智能云 OCR ==========
@@ -277,4 +280,5 @@ def test_ocr_api(provider: str, credentials: Dict, sample_image: Optional[Path] 
         results = ocr_by_api(sample_image, provider, credentials)
         return f"OK: 连通成功，返回 {len(results)} 个文字区域"
     except Exception as e:
+        logger.warning("OCR API 测试失败：%s", e)
         return f"ERROR: {e}"

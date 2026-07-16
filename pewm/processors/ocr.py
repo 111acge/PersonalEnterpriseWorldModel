@@ -9,8 +9,11 @@
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from pewm.paths import MEDIA_DIR
+from pewm.paths import INBOX_DIR, MEDIA_DIR, ROOT
+from pewm.processors.log_config import get_logger
 from pewm.processors.ocr_api import ocr_by_api, load_ocr_config
+
+logger = get_logger(__name__)
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
 
 # 全局缓存：PaddleOCR 实例
@@ -124,6 +127,7 @@ def ocr_for_inbox_file(inbox_file: Path,
             if t:
                 texts.append(f"[图片: {img.name}]\n{t}")
         except Exception as e:
+            logger.warning("图片 %s 识别失败: %s", img.name, e)
             texts.append(f"[图片 {img.name} 识别失败: {e}]")
 
     if progress_callback:
@@ -144,6 +148,7 @@ def process_all_media(progress_callback: Optional[Callable] = None) -> Dict[Path
         try:
             out[img] = ocr_image(img)
         except Exception as e:
+            logger.warning("图片 %s 识别失败: %s", img.name, e)
             out[img] = f"[识别失败: {e}]"
     if progress_callback:
         progress_callback(total, total, "OCR 完成")

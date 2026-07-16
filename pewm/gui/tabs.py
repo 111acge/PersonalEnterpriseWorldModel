@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from pewm.gui.styles import ACCENT_COLOR, BODY_FONT, CARD_BG, MONO_FONT
 from pewm.paths import ROOT
 from pewm.processors.config_manager import backup_to_dir, export_all, import_from
 from pewm.processors.database import (
@@ -21,11 +22,12 @@ from pewm.processors.database import (
     soft_delete_document,
 )
 from pewm.processors.llm_client import PROVIDERS, load_config, save_config, test_api
+from pewm.processors.log_config import get_logger
 from pewm.processors.ocr_api import OCR_PROVIDERS, load_ocr_config, save_ocr_config, test_ocr_api
 from pewm.processors.prompt_config import PROMPT_FIELDS, get_greeting, load_prompt, save_prompt
 from pewm.processors.user_profile import load_profile, save_profile
 
-from pewm.gui.styles import ACCENT_COLOR, BODY_FONT, CARD_BG, MONO_FONT
+logger = get_logger(__name__)
 
 
 # ========== Chat Tab ==========
@@ -113,6 +115,7 @@ class ChatTab:
                 )
                 answer = self._format_answer(result)
             except Exception as e:
+                logger.exception("GUI 问答失败")
                 answer = f"出错了：{e}"
             self.frame.after(0, lambda: self._show_answer(answer, marker))
 
@@ -202,6 +205,7 @@ class SearchTab:
                     top_k=10,
                 )
             except Exception as e:
+                logger.exception("GUI 搜索失败")
                 self.frame.after(0, lambda: self.append(f"搜索失败：{e}"))
                 self.frame.after(0, lambda: self.search_btn.config(state="normal"))
                 return
@@ -343,6 +347,7 @@ class PipelineTab:
                 text=f"Inbox 已处理：{stats['inbox_total']}  |  已索引文档：{stats['document_count']}"
             )
         except Exception as e:
+            logger.exception("刷新状态失败")
             self.status_label.config(text=f"状态获取失败：{e}")
 
     def run_pipeline(self):
@@ -365,6 +370,7 @@ class PipelineTab:
                 runpy.run_path(str(ROOT / "run.py"), run_name="__main__")
                 output = buffer.getvalue()
             except Exception as e:
+                logger.exception("管线运行失败")
                 output = f"管线运行失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
@@ -422,6 +428,7 @@ class PipelineTab:
                 self.frame.after(0, lambda: self.log(summary + "\n\n"))
                 dlg.finish(f"完成：识别 {len(results)} 张图片")
             except Exception as e:
+                logger.exception("批量 OCR 失败")
                 self.frame.after(0, lambda: messagebox.showerror("批量 OCR 失败", str(e)))
                 dlg.finish(f"失败：{e}")
             finally:
@@ -465,6 +472,7 @@ class PipelineTab:
                 do_rebuild()
                 output = buffer.getvalue()
             except Exception as e:
+                logger.exception("重建向量索引失败")
                 output = f"向量索引重建失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
@@ -603,6 +611,7 @@ class DocumentsTab:
                 msg += "  ⚠ 结果已截断（>50000 条），请用搜索/类型过滤"
             self.status_label.config(text=msg)
         except Exception as e:
+            logger.exception("文档统计失败")
             self.status_label.config(text=f"统计失败：{e}")
 
     def _get_selected_paths(self):
@@ -836,6 +845,7 @@ class ApiConfigTab:
                 result = test_api(provider, api_key, base_url if base_url else None)
                 self.frame.after(0, lambda: self._on_test_done(result))
             except Exception as e:
+                logger.exception("LLM API 测试失败")
                 self.frame.after(0, lambda: self._on_test_done(f"ERROR: {e}"))
 
         threading.Thread(target=task, daemon=True).start()
@@ -1244,6 +1254,7 @@ class OcrConfigTab:
                 result = test_ocr_api(provider, credentials)
                 self.frame.after(0, lambda: self._on_test_done(result))
             except Exception as e:
+                logger.exception("OCR API 测试失败")
                 self.frame.after(0, lambda: self._on_test_done(f"ERROR: {e}"))
 
         threading.Thread(target=task, daemon=True).start()

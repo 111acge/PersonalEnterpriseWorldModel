@@ -4,6 +4,7 @@
 与显式记录接口。所有数据保存在 data/world-model.db 中，便于在「设置」页展示。
 """
 import functools
+import json
 import sqlite3
 import threading
 import time
@@ -14,6 +15,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pewm.paths as paths
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
 
 _thread_local = threading.local()
 
@@ -79,8 +83,6 @@ def record(
         conn = _connection()
         meta_json = ""
         if meta:
-            import json
-
             meta_json = json.dumps(meta, ensure_ascii=False, default=str)
         conn.execute(
             """
@@ -99,7 +101,7 @@ def record(
         conn.commit()
     except Exception as e:
         # 埋点失败不应影响主流程
-        print(f"[metrics] 记录指标失败：{e}")
+        logger.warning("记录指标失败：%s", e)
 
 
 @contextmanager
@@ -159,7 +161,7 @@ def get_recent(event: Optional[str] = None, limit: int = 100) -> list:
             ).fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
-        print(f"[metrics] 查询指标失败：{e}")
+        logger.warning("查询指标失败：%s", e)
         return []
 
 
@@ -190,5 +192,5 @@ def get_summary(event: str, limit: int = 100) -> Dict[str, Any]:
         data["success_rate"] = round(success / total, 4) if total > 0 else 1.0
         return data
     except Exception as e:
-        print(f"[metrics] 汇总指标失败：{e}")
+        logger.warning("汇总指标失败：%s", e)
         return {}

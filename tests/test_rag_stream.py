@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from pewm.processors.database import init_db
-from pewm.processors.rag import rag_answer_stream
+from pewm.processors.rag import rag_answer, rag_answer_stream
 
 
 def test_rag_answer_stream_no_api_fallback(temp_project):
@@ -32,3 +32,19 @@ def test_rag_stream_endpoint_exists(temp_project):
     # 未传问题时应返回 400
     resp = client.post('/api/chat/stream', json={})
     assert resp.status_code == 400
+
+
+def test_rag_answer_no_api_fallback(temp_project):
+    """非流式接口在未配置 API 时应返回检索结果。"""
+    init_db()
+    with patch("pewm.processors.rag.load_config", return_value={"api_key": ""}):
+        result = rag_answer("test query")
+    assert result["mode"] in ("no_api", "retrieval_only")
+
+
+def test_rag_answer_sources_are_paths(temp_project):
+    """RAG 返回的 sources 应为文档路径列表。"""
+    init_db()
+    with patch("pewm.processors.rag.load_config", return_value={"api_key": ""}):
+        result = rag_answer("test query")
+    assert isinstance(result.get("sources"), list)

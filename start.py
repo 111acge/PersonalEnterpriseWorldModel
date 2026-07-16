@@ -19,14 +19,18 @@ ROOT = Path(__file__).resolve().parent
 
 # 统一日志配置
 sys.path.insert(0, str(ROOT))
-from pewm.processors.log_config import setup_logging
+from pewm.processors.crash_handler import install_crash_handler
+from pewm.processors.log_config import get_logger, setup_logging
 
 setup_logging()
+install_crash_handler()
+logger = get_logger(__name__)
 
 
 def _show_fatal_error(msg: str):
-    """在控制台显示致命错误。"""
+    """在控制台显示致命错误，同时记录到日志。"""
     sys.stderr.write(msg + "\n")
+    logger.error(msg)
 
 
 def main():

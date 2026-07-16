@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import pewm.paths as paths
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 _thread_local = threading.local()
@@ -34,6 +37,7 @@ def db_connection():
     try:
         yield conn
     except Exception:
+        logger.exception("数据库事务回滚")
         conn.rollback()
         raise
 
@@ -127,7 +131,9 @@ def init_db() -> None:
             END
         """)
         conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
+            CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents
+            WHEN OLD.title != NEW.title OR OLD.content != NEW.content
+            BEGIN
                 INSERT INTO fts_documents(fts_documents, rowid, title, content)
                 VALUES ('delete', OLD.id, OLD.title, OLD.content);
                 INSERT INTO fts_documents(rowid, title, content)
@@ -213,10 +219,10 @@ def soft_delete_document(path: str) -> bool:
 
 
 def restore_document(path: str) -> bool:
-    """恢复软删除的文档：把 deleted_at 置空，重新加入 FTS 索引。"""
+    """恢复软删除的文档：把 deleted_at 置空，UPDATE 触发器会自动同步 FTS 索引。"""
     with db_connection() as conn:
         row = conn.execute(
-            "SELECT id, title, content FROM documents WHERE path = ? AND deleted_at != ''",
+            "SELECT id FROM documents WHERE path = ? AND deleted_at != ''",
             (_to_rel(path),),
         ).fetchone()
         if not row:
@@ -224,10 +230,6 @@ def restore_document(path: str) -> bool:
         conn.execute(
             "UPDATE documents SET deleted_at = '' WHERE id = ?",
             (row["id"],),
-        )
-        conn.execute(
-            "INSERT INTO fts_documents(rowid, title, content) VALUES (?, ?, ?)",
-            (row["id"], row["title"], row["content"]),
         )
         conn.commit()
         return True

@@ -10,6 +10,9 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from pewm.paths import INBOX_DIR
+from pewm.processors.log_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class InboxHandler(FileSystemEventHandler):
@@ -61,6 +64,7 @@ class PipelineWatcher:
             self._last_log = buffer.getvalue()
         except Exception as e:
             self._last_log = f"后台管线运行失败：{e}\n"
+            logger.warning("后台管线运行失败：%s", e)
         finally:
             sys.stdout = old_stdout
 
