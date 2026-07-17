@@ -45,7 +45,7 @@ def get_version() -> str:
 
 
 @timed("desktop.start")
-def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
+def start_desktop_app(title="个人企业世界模型", width=1366, height=850):
     """启动 Flask + pywebview 桌面应用。"""
     controller = SplashController(version=get_version(), timeout=15.0)
     window = None
@@ -153,7 +153,8 @@ def start_desktop_app(title="个人企业世界模型", width=1280, height=800):
         height=360,
         frameless=True,
         on_top=True,
-        resizable=False,
+        resizable=True,
+        min_size=(960, 600),
     )
     controller.set_window(window)
 

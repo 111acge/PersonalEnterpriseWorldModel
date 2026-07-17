@@ -292,7 +292,7 @@ class PipelineTab:
     def __init__(self, parent):
         self.frame = ttk.Frame(parent)
         self.parent = parent
-        parent.add(self.frame, text="管线")
+        parent.add(self.frame, text="本体生成")
 
         # 状态栏
         status_frame = ttk.Frame(self.frame)
@@ -309,7 +309,7 @@ class PipelineTab:
         # 按钮工具栏
         btn_frame = ttk.Frame(self.frame)
         btn_frame.pack(fill="x", padx=16, pady=8)
-        self.run_btn = ttk.Button(btn_frame, text="▶ 运行 AI 管线", command=self.run_pipeline)
+        self.run_btn = ttk.Button(btn_frame, text="▶ 运行本体生成", command=self.run_pipeline)
         self.run_btn.pack(side="left", padx=(0, 10))
         self.ocr_btn = ttk.Button(btn_frame, text="批量 OCR", command=self.run_batch_ocr)
         self.ocr_btn.pack(side="left", padx=(0, 10))
@@ -354,7 +354,7 @@ class PipelineTab:
         self.run_btn.config(state="disabled")
         from pewm.processors.progress_dialog import ProgressDialog
 
-        dlg = ProgressDialog(self.frame, title="运行 AI 管线", total=0, message="正在准备...")
+        dlg = ProgressDialog(self.frame, title="运行本体生成", total=0, message="正在准备...")
 
         def progress_callback(current, total, message):
             dlg.update(current, message)
@@ -370,8 +370,8 @@ class PipelineTab:
                 runpy.run_path(str(ROOT / "run.py"), run_name="__main__")
                 output = buffer.getvalue()
             except Exception as e:
-                logger.exception("管线运行失败")
-                output = f"管线运行失败：{e}\n"
+                logger.exception("本体生成运行失败")
+                output = f"本体生成运行失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
             self.frame.after(0, lambda: self._pipeline_done(output, dlg))
@@ -379,9 +379,9 @@ class PipelineTab:
         threading.Thread(target=task, daemon=True).start()
 
     def _pipeline_done(self, output, dlg):
-        dlg.finish("管线运行完成")
+        dlg.finish("本体生成运行完成")
         self.log(output)
-        self.log("\n管线运行完成。\n")
+        self.log("\n本体生成运行完成。\n")
         self.run_btn.config(state="normal")
         self.refresh_status()
 

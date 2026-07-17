@@ -126,6 +126,149 @@ def create_app() -> Flask:
         inbox_path.write_text(content + "\n", encoding="utf-8")
         return jsonify(success=True, path=str(inbox_path.relative_to(ROOT)))
 
+    # ========== 笔记工作台 ==========
+    # 笔记读取范围（相对于 ROOT）：速记 + AI 提炼生成的各知识层
+    _NOTE_DIRS = ["00-Inbox", "10-Theory", "20-Ontology", "30-Instances"]
+
+    def _resolve_note_path(rel_path: str):
+        """将相对路径解析为 ROOT 下的安全绝对路径，越界返回 None。"""
+        rel_path = (rel_path or "").strip().lstrip("/\\")
+        if not rel_path:
+            return None
+        candidate = (ROOT / rel_path).resolve()
+        try:
+            candidate.relative_to(ROOT.resolve())
+        except ValueError:
+            return None
+        if not any(str(candidate).startswith(str((ROOT / d).resolve())) for d in _NOTE_DIRS):
+            return None
+        if candidate.suffix.lower() != ".md":
+            return None
+        return candidate
+
+    def _note_meta(p: Path):
+        """生成笔记列表项元数据。"""
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            text = ""
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        stat = p.stat()
+        return {
+            "path": str(p.relative_to(ROOT)).replace("\\", "/"),
+            "name": p.stem,
+            "dir": p.parent.relative_to(ROOT).as_posix(),
+            "updated_at": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "preview": (lines[0] if lines else "")[:80],
+            "tags": sorted(set(re.findall(r"#([\w\u4e00-\u9fff-]+)", text))),
+        }
+
+    @app.route("/api/notes")
+    def api_notes():
+        """列出笔记目录下的所有 Markdown 笔记。"""
+        try:
+            keyword = (request.args.get("keyword") or "").strip().lower()
+            tag = (request.args.get("tag") or "").strip().lstrip("#")
+            notes = []
+            for d in _NOTE_DIRS:
+                base = ROOT / d
+                if not base.exists():
+                    continue
+                for p in sorted(base.rglob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
+                    meta = _note_meta(p)
+                    if keyword and keyword not in meta["name"].lower() and keyword not in meta["preview"].lower():
+                        continue
+                    if tag and tag not in meta["tags"]:
+                        continue
+                    notes.append(meta)
+            return jsonify(success=True, data=notes[:500])
+        except Exception as e:
+            logger.exception("列出笔记失败")
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/notes/content")
+    def api_note_content():
+        """读取单篇笔记内容。"""
+        p = _resolve_note_path(request.args.get("path") or "")
+        if not p or not p.exists():
+            return jsonify(success=False, error="笔记不存在"), 404
+        try:
+            return jsonify(success=True, data={
+                "path": str(p.relative_to(ROOT)).replace("\\", "/"),
+                "name": p.stem,
+                "content": p.read_text(encoding="utf-8", errors="replace"),
+            })
+        except Exception as e:
+            logger.exception("读取笔记失败")
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/notes/save", methods=["POST"])
+    def api_note_save():
+        """保存笔记：有 path 则覆盖，否则按标题新建到 00-Inbox。"""
+        data = request.get_json() or {}
+        content = data.get("content") or ""
+        rel = (data.get("path") or "").strip()
+        title = (data.get("title") or "").strip()
+        try:
+            if rel:
+                p = _resolve_note_path(rel)
+                if not p:
+                    return jsonify(success=False, error="非法的笔记路径"), 400
+            else:
+                if not title:
+                    first = next((l.strip() for l in content.splitlines() if l.strip()), "")
+                    title = first[:20] or "未命名笔记"
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                safe = re.sub(r"[^\w\u4e00-\u9fff-]", "", title).strip("-") or "note"
+                p = ROOT / "00-Inbox" / f"{date_str}-{safe}.md"
+                counter = 1
+                while p.exists():
+                    p = ROOT / "00-Inbox" / f"{date_str}-{safe}-{counter}.md"
+                    counter += 1
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content.rstrip("\n") + "\n", encoding="utf-8")
+            return jsonify(success=True, message="笔记已保存",
+                           path=str(p.relative_to(ROOT)).replace("\\", "/"))
+        except Exception as e:
+            logger.exception("保存笔记失败")
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/notes/delete", methods=["POST"])
+    def api_note_delete():
+        """删除单篇笔记文件。"""
+        data = request.get_json() or {}
+        p = _resolve_note_path(data.get("path") or "")
+        if not p or not p.exists():
+            return jsonify(success=False, error="笔记不存在"), 404
+        try:
+            p.unlink()
+            return jsonify(success=True, message="笔记已删除")
+        except Exception as e:
+            logger.exception("删除笔记失败")
+            return jsonify(success=False, error=str(e)), 500
+
+    @app.route("/api/tags")
+    def api_tags():
+        """从所有笔记内容中提取 #标签 及使用次数。"""
+        try:
+            counts: Dict[str, int] = {}
+            for d in _NOTE_DIRS:
+                base = ROOT / d
+                if not base.exists():
+                    continue
+                for p in base.rglob("*.md"):
+                    try:
+                        text = p.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    for t in set(re.findall(r"#([\w\u4e00-\u9fff-]+)", text)):
+                        counts[t] = counts.get(t, 0) + 1
+            tags = [{"name": k, "count": v} for k, v in sorted(counts.items(), key=lambda x: -x[1])]
+            return jsonify(success=True, data=tags[:50])
+        except Exception as e:
+            logger.exception("提取标签失败")
+            return jsonify(success=False, error=str(e)), 500
+
     # ========== 文档管理 ==========
     @app.route("/api/documents")
     def api_documents():
@@ -326,7 +469,7 @@ def create_app() -> Flask:
             logger.exception("清空对话历史失败")
             return jsonify(success=False, error=str(e)), 500
 
-    # ========== 管线 ==========
+    # ========== 本体生成（原管线） ==========
     _pipeline_lock = threading.Lock()
     _pipeline_logs: Dict[str, Any] = {"running": False, "output": ""}
 
@@ -340,7 +483,7 @@ def create_app() -> Flask:
     @app.route("/api/pipeline/run", methods=["POST"])
     def api_pipeline_run():
         if _pipeline_lock.locked():
-            return jsonify(success=False, error="管线正在运行中"), 409
+            return jsonify(success=False, error="本体生成正在运行中"), 409
         with _pipeline_lock:
             _pipeline_logs["running"] = True
             _pipeline_logs["output"] = ""
@@ -352,14 +495,19 @@ def create_app() -> Flask:
             buffer = io.StringIO()
             sys.stdout = buffer
             try:
-                import runpy
-                argv = ["run.py"] + options
-                sys.argv = argv
-                runpy.run_path(str(ROOT / "run.py"), run_name="__main__")
+                # 直接调用本体生成函数，避免依赖磁盘上的 run.py（打包后不存在）
+                from pewm.processors.__main__ import run_pipeline as do_run
+                do_run(
+                    reset="--reset" in options,
+                    skip_errors="--skip-errors" in options,
+                    no_git="--no-git" in options,
+                    no_vector="--no-vector" in options,
+                    no_ocr="--no-ocr" in options,
+                )
                 output = buffer.getvalue()
             except Exception as e:
-                logger.exception("管线运行失败")
-                output = f"管线运行失败：{e}\n"
+                logger.exception("本体生成运行失败")
+                output = f"本体生成运行失败：{e}\n"
             finally:
                 sys.stdout = old_stdout
             _pipeline_logs["output"] += output
@@ -367,7 +515,7 @@ def create_app() -> Flask:
             invalidate_search_cache()
 
         threading.Thread(target=task, daemon=True).start()
-        return jsonify(success=True, message="管线已启动")
+        return jsonify(success=True, message="本体生成已启动")
 
     @app.route("/api/pipeline/logs")
     def api_pipeline_logs():
@@ -571,22 +719,17 @@ def create_app() -> Flask:
         ok, msg = backup_to_dir(Path(path))
         return jsonify(success=ok, message=msg)
 
-    # ========== 崩溃上报 ==========
-    @app.route("/api/config/crash")
-    def api_config_crash():
-        cfg = load_config()
-        return jsonify(success=True, data={
-            "crash_reporting_enabled": bool(cfg.get("crash_reporting_enabled", False))
-        })
+    @app.route("/api/environment/status")
+    def api_environment_status():
+        try:
+            from pewm.processors.environment_status import get_environment_status
+            status = get_environment_status()
+            return jsonify(success=True, data=status)
+        except Exception as e:
+            logger.exception("获取环境状态失败")
+            return jsonify(success=False, error=str(e)), 500
 
-    @app.route("/api/config/crash", methods=["POST"])
-    def api_config_crash_save():
-        data = request.get_json() or {}
-        cfg = load_config()
-        cfg["crash_reporting_enabled"] = bool(data.get("crash_reporting_enabled", False))
-        save_config(cfg)
-        return jsonify(success=True, message="崩溃上报设置已保存")
-
+    # ========== 崩溃日志（仅本地查看） ==========
     @app.route("/api/crash/logs")
     def api_crash_logs():
         try:

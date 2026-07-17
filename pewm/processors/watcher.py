@@ -1,4 +1,4 @@
-"""后台监听 00-Inbox/，文件变化时自动触发 AI 管线。"""
+"""后台监听 00-Inbox/，文件变化时自动触发本体生成。"""
 import io
 import sys
 import threading
@@ -6,17 +6,26 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
-
 from pewm.paths import INBOX_DIR
 from pewm.processors.log_config import get_logger
 
 logger = get_logger(__name__)
 
+# 兼容未安装 watchdog 的环境：功能降级，但 API 不崩溃
+try:
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+
+    WATCHDOG_AVAILABLE = True
+except Exception as _e:
+    WATCHDOG_AVAILABLE = False
+    FileSystemEventHandler = object  # type: ignore
+    Observer = None  # type: ignore
+    logger.warning("watchdog 未安装，后台监听功能不可用：%s", _e)
+
 
 class InboxHandler(FileSystemEventHandler):
-    """监听 Inbox 目录变化，防抖后触发管线。"""
+    """监听 Inbox 目录变化，防抖后触发本体生成。"""
 
     def __init__(self, callback: Callable, debounce_seconds: float = 2.0):
         self.callback = callback
@@ -41,35 +50,38 @@ class InboxHandler(FileSystemEventHandler):
 
 
 class PipelineWatcher:
-    """后台 AI 管线监听器。"""
+    """后台本体生成监听器。"""
 
     def __init__(self, callback: Optional[Callable] = None, debounce: float = 2.0):
-        self.observer: Optional[Observer] = None
+        self.observer: Optional[Observer] = None  # type: ignore
         self.handler: Optional[InboxHandler] = None
         self.callback = callback or self._default_callback
         self.debounce = debounce
         self._running = False
         self._last_log = ""
+        self._unavailable = not WATCHDOG_AVAILABLE
 
     def _default_callback(self):
-        """默认回调：运行 run.py 管线。"""
+        """默认回调：直接调用本体生成函数（不依赖磁盘上的 run.py，兼容打包模式）。"""
         old_stdout = sys.stdout
         buffer = io.StringIO()
         sys.stdout = buffer
         try:
-            import runpy
-            argv = ["run.py", "--no-git", "--no-ocr"]
-            sys.argv = argv
-            runpy.run_path(str(Path(__file__).resolve().parents[2] / "run.py"), run_name="__main__")
+            from pewm.processors.__main__ import run_pipeline
+            run_pipeline(no_git=True, no_ocr=True)
             self._last_log = buffer.getvalue()
         except Exception as e:
-            self._last_log = f"后台管线运行失败：{e}\n"
-            logger.warning("后台管线运行失败：%s", e)
+            self._last_log = f"后台本体生成运行失败：{e}\n"
+            logger.warning("后台本体生成运行失败：%s", e)
         finally:
             sys.stdout = old_stdout
 
     def start(self):
         """启动监听。"""
+        if self._unavailable:
+            self._last_log = f"[{time.strftime('%H:%M:%S')}] watchdog 未安装，后台监听不可用\n"
+            logger.warning("watchdog 未安装，无法启动后台监听")
+            return False
         if self._running:
             return False
         INBOX_DIR.mkdir(parents=True, exist_ok=True)

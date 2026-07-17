@@ -12,7 +12,7 @@ openai>=1.0.0
 sentence-transformers>=2.2.0
 
 # 文件监控（可选，用于自动触发 AI 管线）
-watchdog>=3.0
+watchdog==6.0.0
 
 # Git 自动提交（可选）
 gitpython>=3.1.0

@@ -56,6 +56,7 @@ a = Analysis(
         'pewm.paths',
         'pewm.web.app',
         'pewm.web.desktop',
+        'pewm.processors.__main__',
         'pewm.processors.database',
         'pewm.processors.extractor',
         'pewm.processors.vectorizer',
@@ -120,4 +121,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/icon.ico',          # 应用图标（任务栏 / 资源管理器 / 窗口）
+    version='assets/version_info.txt',  # Windows 版本信息资源
+    manifest='assets/app.manifest',  # DPI 感知 + 通用控件 v6，消除高 DPI 模糊
 )

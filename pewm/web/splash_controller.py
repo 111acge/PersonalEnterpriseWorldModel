@@ -9,6 +9,7 @@
 
 通过 js_api 暴露给前端，前端每 100ms 轮询进度。
 """
+import logging
 import socket
 import sys
 import threading
@@ -53,6 +54,8 @@ class SplashController:
         self._lock = threading.Lock()
         self._on_complete: Optional[Callable] = None
         self._phase_results: dict = {}
+        self._maximized = False
+        self._minimized = False
 
     def set_window(self, window):
         self._window = window
@@ -262,31 +265,44 @@ class SplashController:
         try:
             if self._window:
                 self._window.minimize()
+                self._minimized = True
         except Exception as e:
             logger.warning("最小化窗口失败：%s", e)
+            return {"success": False, "error": str(e)}
         return {"success": True}
 
     def maximize_window(self):
         """最大化/还原窗口。"""
         try:
-            if self._window:
-                if getattr(self._window, "maximized", False):
-                    self._window.restore()
-                    self._window.maximized = False
-                else:
-                    self._window.maximize()
-                    self._window.maximized = True
+            if not self._window:
+                return {"success": True}
+            # 优先使用窗口对象自带的状态查询
+            try:
+                currently_maximized = bool(self._window.is_maximized)
+            except Exception:
+                currently_maximized = self._maximized
+
+            if currently_maximized:
+                self._window.restore()
+                self._maximized = False
+            else:
+                self._window.maximize()
+                self._maximized = True
         except Exception as e:
-            logger.warning("最大化窗口失败：%s", e)
+            logger.warning("最大化/还原窗口失败：%s", e)
+            return {"success": False, "error": str(e)}
         return {"success": True}
 
     def close_window(self):
-        """关闭当前窗口（不强制退出进程）。"""
+        """关闭当前窗口并退出应用进程。"""
         try:
             if self._window:
                 self._window.destroy()
         except Exception as e:
             logger.warning("关闭窗口失败：%s", e)
+        # 窗口真实存在时退出进程，避免残留；测试中 _window 为 None，仅返回 success
+        if self._window:
+            sys.exit(0)
         return {"success": True}
 
     def exit_app(self):

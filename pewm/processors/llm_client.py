@@ -161,3 +161,22 @@ def test_api(provider: str, api_key: str, base_url: str = None) -> str:
     except Exception as e:
         logger.warning("API 测试失败：%s", e)
         return f"ERROR: {e}"
+
+
+def check_llm_ready() -> tuple:
+    """本体生成前置检查：LLM 是否可用。
+
+    返回 (ok, message)。原则：本体提炼必须经过 LLM，不可用时不允许执行。
+    """
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        return False, "未配置 LLM API Key，本体生成已取消。请在「设置 → LLM API」中配置后重试。"
+    try:
+        chat_completion(
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0,
+            max_tokens=4,
+        )
+        return True, ""
+    except Exception as e:
+        return False, f"LLM 连接失败，本体生成已取消：{e}"

@@ -1,0 +1,35 @@
+# UTF-8
+# PyInstaller Windows 版本信息资源
+# 详见: https://pyinstaller.org/en/stable/usage.html#capturing-windows-version-data
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          '080404B0',
+          [
+            StringStruct('CompanyName', 'PEWM'),
+            StringStruct('FileDescription', '个人企业世界模型 - 本地知识笔记'),
+            StringStruct('FileVersion', '1.0.0.0'),
+            StringStruct('InternalName', 'PEWM'),
+            StringStruct('LegalCopyright', '© 2026 PEWM. All rights reserved.'),
+            StringStruct('OriginalFilename', '个人企业世界模型.exe'),
+            StringStruct('ProductName', '个人企业世界模型'),
+            StringStruct('ProductVersion', '1.0.0.0'),
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])])
+  ]
+)

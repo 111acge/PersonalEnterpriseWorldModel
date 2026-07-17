@@ -13,7 +13,8 @@ def test_run_pipeline_indexes_document(temp_project):
 
     with patch("pewm.processors.__main__.extract_entities_batch") as mock_extract, \
          patch("pewm.processors.__main__.index_documents") as mock_index, \
-         patch("pewm.processors.__main__.load_schemas") as mock_schemas:
+         patch("pewm.processors.__main__.load_schemas") as mock_schemas, \
+         patch("pewm.processors.llm_client.check_llm_ready", return_value=(True, "")):
         mock_schemas.return_value = {"note": {"fields": ["content"], "required": ["content"]}}
         mock_extract.return_value = [
             [{"entity_type": "note", "path": inbox / "test_note.md", "content": "测试速记"}]

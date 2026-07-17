@@ -7,47 +7,110 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+    <!-- SVG 图标库 -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+            <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9 21v-6h6v6"/></symbol>
+            <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2.3-2.9A8 8 0 1 1 21 12z"/></symbol>
+            <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></symbol>
+            <symbol id="i-note" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+            <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></symbol>
+            <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h6a3 3 0 0 1 3 3v6"/></symbol>
+            <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.24.6.86 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></symbol>
+            <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+            <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+            <symbol id="i-min" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+            <symbol id="i-max" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+            <symbol id="i-restore" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="1.5"/><path d="M5 15V6a1.5 1.5 0 0 1 1.5-1.5H15"/></symbol>
+            <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+            <symbol id="i-collapse" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+            <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+            <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+            <symbol id="i-tag" viewBox="0 0 24 24"><path d="m3 12 9-9h9v9l-9 9z"/><circle cx="16.5" cy="7.5" r="1.2"/></symbol>
+            <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7"/></symbol>
+            <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
+            <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+            <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+            <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></symbol>
+            <symbol id="i-bold" viewBox="0 0 24 24"><path d="M7 4h7a3.5 3.5 0 0 1 0 7H7zM7 11h8a3.5 3.5 0 0 1 0 7H7z"/></symbol>
+            <symbol id="i-italic" viewBox="0 0 24 24"><path d="M19 4h-9M14 20H5M15 4 9 20"/></symbol>
+            <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></symbol>
+            <symbol id="i-quote" viewBox="0 0 24 24"><path d="M10 11H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v7a4 4 0 0 1-4 4M20 11h-4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v7a4 4 0 0 1-4 4"/></symbol>
+            <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></symbol>
+            <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+            <symbol id="i-heading" viewBox="0 0 24 24"><path d="M6 4v16M18 4v16M6 12h12"/></symbol>
+        </defs>
+    </svg>
+
+    <!-- 自定义标题栏 -->
     <div class="titlebar" id="titlebar">
         <div class="titlebar-drag" id="titlebar-drag">
-            <span class="titlebar-icon">PEWM</span>
+            <span class="titlebar-logo">P</span>
             <span class="titlebar-text">个人企业世界模型</span>
         </div>
-        <div class="titlebar-actions">
-            <button class="titlebar-btn" id="window-minimize" title="最小化">−</button>
-            <button class="titlebar-btn" id="window-maximize" title="最大化">□</button>
-            <button class="titlebar-btn titlebar-close" id="window-close" title="关闭">×</button>
+        <div class="titlebar-actions" style="-webkit-app-region: no-drag; app-region: no-drag;">
+            <button class="titlebar-btn" id="window-minimize" title="最小化"><svg class="icon"><use href="#i-min"/></svg></button>
+            <button class="titlebar-btn" id="window-maximize" title="最大化"><svg class="icon"><use href="#i-max"/></svg></button>
+            <button class="titlebar-btn titlebar-close" id="window-close" title="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
         </div>
     </div>
 
     <div id="app">
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
             <div class="brand">
                 <div class="brand-icon">PEWM</div>
                 <div class="brand-text">个人企业世界模型</div>
+                <button class="sidebar-collapse-btn" id="sidebar-collapse" title="折叠侧边栏">
+                    <svg class="icon icon-sm"><use href="#i-collapse"/></svg>
+                </button>
             </div>
             <nav class="nav">
-                <a href="#dashboard" class="nav-item active" data-page="dashboard">
-                    <span class="nav-icon">🏠</span> 概览
+                <a href="#dashboard" class="nav-item active" data-page="dashboard" title="概览">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-home"/></svg></span><span class="nav-label">概览</span>
                 </a>
-                <a href="#chat" class="nav-item" data-page="chat">
-                    <span class="nav-icon">💬</span> 对话
+                <a href="#inbox" class="nav-item" data-page="inbox" title="笔记">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-note"/></svg></span><span class="nav-label">笔记</span>
                 </a>
-                <a href="#search" class="nav-item" data-page="search">
-                    <span class="nav-icon">🔍</span> 检索
+                <a href="#chat" class="nav-item" data-page="chat" title="对话">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-chat"/></svg></span><span class="nav-label">对话</span>
                 </a>
-                <a href="#inbox" class="nav-item" data-page="inbox">
-                    <span class="nav-icon">📝</span> 速记
+                <a href="#search" class="nav-item" data-page="search" title="检索">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-search"/></svg></span><span class="nav-label">检索</span>
                 </a>
-                <a href="#documents" class="nav-item" data-page="documents">
-                    <span class="nav-icon">📚</span> 文档管理
+                <a href="#documents" class="nav-item" data-page="documents" title="知识库文档">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-book"/></svg></span><span class="nav-label">知识库文档</span>
                 </a>
-                <a href="#pipeline" class="nav-item" data-page="pipeline">
-                    <span class="nav-icon">⚙️</span> 管线
+                <a href="#pipeline" class="nav-item" data-page="pipeline" title="本体生成">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-flow"/></svg></span><span class="nav-label">本体生成</span>
                 </a>
-                <a href="#settings" class="nav-item" data-page="settings">
-                    <span class="nav-icon">⚙️</span> 设置
+                <a href="#settings" class="nav-item" data-page="settings" title="设置">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-gear"/></svg></span><span class="nav-label">设置</span>
                 </a>
             </nav>
+            <div class="side-scroll">
+                <div class="side-section">
+                    <div class="side-section-title">我的笔记</div>
+                    <a class="side-link" data-dir="">
+                        <svg class="icon icon-sm"><use href="#i-folder"/></svg> 全部笔记 <span class="count" id="nb-count-all">-</span>
+                    </a>
+                    <a class="side-link" data-dir="00-Inbox">
+                        <svg class="icon icon-sm"><use href="#i-note"/></svg> 速记箱 · 我写的 <span class="count" id="nb-count-inbox">-</span>
+                    </a>
+                </div>
+                <div class="side-section">
+                    <div class="side-section-title">AI 提炼（本体生成）</div>
+                    <a class="side-link" data-dir="generated">
+                        <svg class="icon icon-sm"><use href="#i-book"/></svg> AI 提炼卡片 <span class="count" id="nb-count-theory">-</span>
+                    </a>
+                    <a class="side-link" data-goto="documents">
+                        <svg class="icon icon-sm"><use href="#i-flow"/></svg> 知识库文档台账
+                    </a>
+                </div>
+                <div class="side-section">
+                    <div class="side-section-title">标签</div>
+                    <div class="tag-cloud" id="tag-cloud"><span class="tag-empty">暂无标签</span></div>
+                </div>
+            </div>
             <div class="sidebar-footer">
                 <span id="status-dot" class="status-dot"></span>
                 <span id="status-text">准备就绪</span>
@@ -58,7 +121,9 @@
             <header class="topbar">
                 <h1 id="page-title">概览</h1>
                 <div class="topbar-actions">
-                    <button id="theme-toggle" class="btn btn-ghost" title="切换主题">🌙</button>
+                    <button id="theme-toggle" class="btn btn-ghost" title="切换主题">
+                        <svg class="icon icon-sm"><use href="#i-moon" id="theme-icon-use"/></svg>
+                    </button>
                 </div>
             </header>
 
@@ -83,8 +148,8 @@
                         <h2>欢迎使用</h2>
                         <p id="greeting-text">正在加载问候语...</p>
                         <div class="quick-actions">
-                            <button class="btn btn-primary" onclick="app.navigate('inbox')">写速记</button>
-                            <button class="btn btn-primary" onclick="app.navigate('pipeline')">运行 AI 管线</button>
+                            <button class="btn btn-primary" onclick="app.navigate('inbox')">写笔记</button>
+                            <button class="btn btn-primary" onclick="app.navigate('pipeline')">运行本体生成</button>
                             <button class="btn btn-primary" onclick="app.navigate('chat')">开始对话</button>
                         </div>
                     </div>
@@ -139,18 +204,59 @@
                     </div>
                 </section>
 
-                <!-- 速记页 -->
+                <!-- 笔记工作台 -->
                 <section id="page-inbox" class="page">
-                    <div class="card">
-                        <div class="form-group">
-                            <label>标题（可选）</label>
-                            <input type="text" id="inbox-title" class="input" placeholder="笔记标题">
+                    <div class="notes-workbench">
+                        <!-- 笔记列表区 -->
+                        <div class="note-list-pane" id="note-list-pane">
+                            <div class="note-list-header">
+                                <input type="text" id="note-search" class="input" placeholder="搜索笔记...">
+                                <button class="icon-btn" id="note-new" title="新建笔记"><svg class="icon icon-sm"><use href="#i-plus"/></svg></button>
+                                <button class="icon-btn" id="note-refresh" title="刷新列表"><svg class="icon icon-sm"><use href="#i-refresh"/></svg></button>
+                            </div>
+                            <div class="note-filter-chips" id="note-filter-chips">
+                                <button class="chip active" data-dir="">全部</button>
+                                <button class="chip" data-dir="00-Inbox">速记</button>
+                                <button class="chip" data-dir="generated">AI 提炼</button>
+                            </div>
+                            <div class="note-list" id="note-list"></div>
                         </div>
-                        <div class="form-group">
-                            <label>内容</label>
-                            <textarea id="inbox-content" class="input" rows="12" placeholder="把随手记的内容写在这里..."></textarea>
+                        <div class="pane-resizer" id="pane-resizer" title="拖拽调整宽度"></div>
+                        <!-- 笔记编辑区 -->
+                        <div class="note-editor-pane">
+                            <div class="note-toolbar">
+                                <button class="md-btn" data-md="bold" title="加粗"><svg class="icon icon-sm"><use href="#i-bold"/></svg></button>
+                                <button class="md-btn" data-md="italic" title="斜体"><svg class="icon icon-sm"><use href="#i-italic"/></svg></button>
+                                <button class="md-btn" data-md="heading" title="标题"><svg class="icon icon-sm"><use href="#i-heading"/></svg></button>
+                                <span class="toolbar-divider"></span>
+                                <button class="md-btn" data-md="code" title="代码块"><svg class="icon icon-sm"><use href="#i-code"/></svg></button>
+                                <button class="md-btn" data-md="quote" title="引用"><svg class="icon icon-sm"><use href="#i-quote"/></svg></button>
+                                <button class="md-btn" data-md="todo" title="待办事项"><svg class="icon icon-sm"><use href="#i-check"/></svg></button>
+                                <button class="md-btn" data-md="list" title="无序列表"><svg class="icon icon-sm"><use href="#i-list"/></svg></button>
+                                <span class="spacer"></span>
+                                <div class="view-toggle" id="note-view-toggle">
+                                    <button class="active" data-view="edit"><svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="#i-edit"/></svg>编辑</button>
+                                    <button data-view="preview"><svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="#i-eye"/></svg>预览</button>
+                                </div>
+                            </div>
+                            <input type="text" id="inbox-title" class="note-title-input" placeholder="笔记标题（可选）">
+                            <div class="note-body-wrap" id="note-body-wrap">
+                                <textarea id="inbox-content" class="note-editor" placeholder="开始记录... 支持 Markdown：# 标题、**加粗**、`代码`、```代码块```、> 引用、- [ ] 待办、#标签"></textarea>
+                                <div class="note-preview" id="note-preview"></div>
+                            </div>
+                            <div class="note-statusbar">
+                                <span id="note-current-path">新笔记</span>
+                                <span id="note-word-count">0 字</span>
+                                <span id="note-save-state"></span>
+                                <span class="spacer" style="flex:1"></span>
+                                <button class="btn btn-ghost" id="note-delete" style="display:none">
+                                    <svg class="icon icon-sm"><use href="#i-trash"/></svg> 删除
+                                </button>
+                                <button class="btn btn-primary" id="inbox-save">
+                                    <svg class="icon icon-sm"><use href="#i-save"/></svg> 保存笔记
+                                </button>
+                            </div>
                         </div>
-                        <button class="btn btn-primary" id="inbox-save">投递到 Inbox</button>
                     </div>
                 </section>
 
@@ -197,19 +303,20 @@
                     </div>
                 </section>
 
-                <!-- 管线页 -->
+                <!-- 本体生成页 -->
                 <section id="page-pipeline" class="page">
                     <div class="card pipeline-card">
                         <div class="pipeline-toolbar">
-                            <button class="btn btn-primary" id="pipeline-run">▶ 运行 AI 管线</button>
+                            <button class="btn btn-primary" id="pipeline-run">▶ 运行本体生成</button>
+                            <button class="btn btn-warning" id="pipeline-run-reset" title="清除已处理标记，重新提炼全部速记">↺ 重置并重新生成</button>
                             <button class="btn btn-primary" id="pipeline-ocr">批量 OCR</button>
                             <button class="btn btn-primary" id="pipeline-rebuild">重建向量索引</button>
                             <button class="btn btn-ghost" id="pipeline-refresh">刷新状态</button>
                         </div>
                         <div class="pipeline-toolbar">
-                            <button class="btn btn-warning" id="watcher-start">🔄 开启后台监听</button>
-                            <button class="btn btn-danger" id="watcher-stop">⏹ 停止后台监听</button>
-                            <span id="watcher-status" style="margin-left:12px;color:var(--text-secondary)">未开启</span>
+                            <button class="btn btn-warning" id="watcher-start">开启后台监听</button>
+                            <button class="btn btn-danger" id="watcher-stop">停止后台监听</button>
+                            <span id="watcher-status" class="badge">未开启</span>
                         </div>
                         <div class="pipeline-status" id="pipeline-status">状态：准备就绪</div>
                         <div class="log-area" id="pipeline-logs"></div>
@@ -219,7 +326,8 @@
                 <!-- 设置页 -->
                 <section id="page-settings" class="page">
                     <div class="settings-tabs">
-                        <button class="settings-tab active" data-settings="llm">LLM API</button>
+                        <button class="settings-tab active" data-settings="appearance">外观</button>
+                        <button class="settings-tab" data-settings="llm">LLM API</button>
                         <button class="settings-tab" data-settings="profile">用户信息</button>
                         <button class="settings-tab" data-settings="prompt">提示词</button>
                         <button class="settings-tab" data-settings="ocr">OCR</button>
@@ -227,7 +335,26 @@
                         <button class="settings-tab" data-settings="diagnostics">诊断</button>
                     </div>
 
-                    <div id="settings-llm" class="settings-panel active">
+                    <div id="settings-appearance" class="settings-panel active">
+                        <div class="card">
+                            <h3>主题模式</h3>
+                            <div class="theme-mode-row">
+                                <div class="theme-mode-card" id="theme-mode-light">
+                                    <div class="theme-mode-preview light"></div>亮色模式
+                                </div>
+                                <div class="theme-mode-card" id="theme-mode-dark">
+                                    <div class="theme-mode-preview dark"></div>暗色模式
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <h3>主题色</h3>
+                            <p style="color:var(--text-secondary);font-size:13px;margin:4px 0 14px">选择应用的强调色，会实时应用到按钮、选中态与高亮元素。</p>
+                            <div class="accent-swatches" id="accent-swatches"></div>
+                        </div>
+                    </div>
+
+                    <div id="settings-llm" class="settings-panel">
                         <div class="card">
                             <div class="form-group">
                                 <label>LLM 提供商</label>
@@ -321,17 +448,13 @@
 
                     <div id="settings-diagnostics" class="settings-panel">
                         <div class="card">
-                            <h3>torch 环境状态</h3>
+                            <h3>环境状态</h3>
                             <div id="torch-status" class="form-status">加载中...</div>
                         </div>
                         <div class="card">
-                            <h3>崩溃日志</h3>
-                            <label class="checkbox">
-                                <input type="checkbox" id="crash-reporting-enabled">
-                                <span>允许匿名崩溃上报（预留，当前仅本地记录）</span>
-                            </label>
+                            <h3>崩溃日志（仅本地存储）</h3>
+                            <p style="color:var(--text-secondary);font-size:13px;margin:4px 0">崩溃日志仅保存在本地用户目录，不会上传至任何远程服务器。</p>
                             <div class="form-actions">
-                                <button class="btn btn-primary" id="crash-save">保存设置</button>
                                 <button class="btn btn-ghost" id="crash-view-logs">查看最近崩溃日志</button>
                             </div>
                             <div id="crash-status" class="form-status"></div>

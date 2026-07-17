@@ -28,6 +28,10 @@ class ExtractedEntity(BaseModel):
     confidence: str = Field("中", description="置信度：高/中/低")
 
 
+# 由管线自动填充的系统字段，不要求 LLM 返回
+SYSTEM_FIELDS = {"source", "updated_at", "confidence", "case_id", "process_id", "skill_id"}
+
+
 def load_schemas() -> Dict[str, Dict[str, Any]]:
     schemas = {}
     for p in paths.SCHEMAS_DIR.glob("*.yaml"):
@@ -122,6 +126,7 @@ _LLM_SYSTEM_PROMPT = """你是一个企业知识库的知识提取助手。
 6. 如果整段内容实在无法归类，用 entity_type="note"，把完整原文放进 content 字段
 7. 不要编造内容，所有字段都要从原文中提取
 8. 字段值用纯字符串，不要用转义字符
+9. 关联字段（related、related_processes、related_constants、systems、aliases）请尽量从原文找出相关概念填写，多个用「、」分隔；确实没有相关内容的填空字符串
 
 示例输出：
 [
@@ -164,7 +169,7 @@ def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> 
                 {"role": "user", "content": f"来源文件：{source}\n\n内容：\n{truncated}"},
             ],
             temperature=0.2,
-            max_tokens=2500,
+            max_tokens=8000,  # 推理型模型思维链占比较高，需要足够输出预算
         )
     except Exception as e:
         logger.warning("LLM 调用失败：%s", e)
@@ -191,7 +196,7 @@ def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -
     included = []
     for idx, (source, text) in enumerate(items):
         remain = max(0, 12000 - total_len)
-        chunk = text[:min(1500, remain)]
+        chunk = text[:min(2500, remain)]
         if not chunk:
             break
         parts.append(f"[SOURCE:{idx}]\n来源文件：{source}\n内容：\n{chunk}\n")
@@ -207,7 +212,7 @@ def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -
                 {"role": "user", "content": "\n".join(parts)},
             ],
             temperature=0.2,
-            max_tokens=4000,
+            max_tokens=8000,
         )
     except Exception as e:
         logger.warning("批量 LLM 调用失败：%s", e)
@@ -223,25 +228,69 @@ def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -
     return grouped
 
 
+def _salvage_objects(text: str) -> list:
+    """从被截断的 JSON 数组中抢救完整的顶层对象。
+
+    推理型模型输出可能被 max_tokens 截断，数组没有闭合。
+    按花括号配平逐个提取完整对象，尽量保留有效实体。
+    """
+    objects = []
+    depth = 0
+    start = -1
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    obj = json.loads(text[start:i + 1])
+                    if isinstance(obj, dict):
+                        objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = -1
+    return objects
+
+
 def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """解析 LLM 响应，并用 Pydantic + schema 必填字段双重校验。"""
+    """解析 LLM 响应，并用 Pydantic + schema 主键双重校验。"""
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text)
     if m:
         text = m.group(1)
     start = text.find("[")
     end = text.rfind("]")
-    if start == -1 or end == -1:
-        logger.warning("LLM 响应中没有 JSON 数组")
-        return []
-    try:
-        raw_items = json.loads(text[start:end + 1])
-    except json.JSONDecodeError as e:
-        logger.warning("JSON 解析失败：%s", e)
-        return []
-    if not isinstance(raw_items, list):
-        logger.warning("LLM 返回的不是数组")
-        return []
+    raw_items = None
+    if start != -1 and end != -1:
+        try:
+            parsed = json.loads(text[start:end + 1])
+            if isinstance(parsed, list):
+                raw_items = parsed
+        except json.JSONDecodeError:
+            pass
+    if raw_items is None:
+        # 数组不完整（可能被 max_tokens 截断）：抢救完整对象
+        raw_items = _salvage_objects(text)
+        if raw_items:
+            logger.info("JSON 数组不完整，抢救出 %d 个完整实体对象", len(raw_items))
+        else:
+            logger.warning("LLM 响应中没有 JSON 数组，响应开头：%s", text[:200])
+            return []
 
     valid_items = []
     for item in raw_items:
@@ -258,16 +307,11 @@ def _parse_and_validate_llm_json(text: str, schemas: Dict[str, Dict[str, Any]]) 
             logger.warning("未知实体类型：%s", etype)
             continue
 
-        # 必填字段校验
-        schema = schemas[etype]
-        missing = [f for f in schema.get("required_frontmatter", [])
-                   if f not in item or item[f] in (None, "")]
-        # 对 name/title/term/key 等主键字段必须存在
+        # 主键字段必须存在（title/term/name/key 任一）；
+        # 其余必填字段缺失时不丢弃，由 _llm_item_to_entity 填充默认值，避免误杀有效实体
         identity_fields = ["title", "term", "name", "key"]
         if not any(item.get(f) for f in identity_fields):
-            missing.append("identity_field")
-        if missing:
-            logger.warning("实体 %s 缺少字段：%s，跳过", etype, missing)
+            logger.warning("实体 %s 缺少主键字段，跳过", etype)
             continue
 
         valid_items.append(item)
@@ -299,11 +343,13 @@ def _rule_extract(text: str, source: str,
 # ========== 统一入口 ==========
 
 def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
-    """提取实体：优先 LLM 智能分析，失败回退规则，再失败整篇存为 note。
+    """提取实体：优先 LLM 智能分析；未配置 LLM 时回退规则；LLM 已配置但无结果时整篇存为 note。
 
+    原则：本体建设必须经过 LLM。已配置 API Key 的情况下不再使用规则提取制造稀疏卡片。
     返回的每个元素包含 path/content/entity_type/frontmatter/merged。
     """
     schemas = load_schemas()
+    has_llm = bool(load_config().get("api_key"))
 
     # 1. 优先：LLM 提取
     llm_items = _llm_extract(text, source, schemas)
@@ -317,12 +363,13 @@ def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
             logger.info("[llm] 提取到 %d 个实体", len(converted))
             return converted
 
-    # 2. 兜底：基于触发词的规则提取
-    rules = load_rules()
-    entities = _rule_extract(text, source, rules, schemas)
-    if entities:
-        logger.info("[rule] 提取到 %d 个实体（LLM 未返回）", len(entities))
-        return entities
+    # 2. 兜底：仅当未配置 LLM 时才使用规则提取（离线/测试场景）
+    if not has_llm:
+        rules = load_rules()
+        entities = _rule_extract(text, source, rules, schemas)
+        if entities:
+            logger.info("[rule] 提取到 %d 个实体（未配置 LLM）", len(entities))
+            return entities
 
     # 3. 终极兜底：整篇作为 note
     if "note" in schemas and text.strip():
@@ -394,6 +441,16 @@ def _llm_item_to_entity(item: Dict[str, Any], schemas: Dict[str, Dict[str, Any]]
                 context[field] = source
             elif field == "updated_at":
                 context[field] = now_iso()
+            elif field in ("case_id", "process_id", "skill_id"):
+                # 系统生成 ID，LLM 不提供时自动补齐
+                prefix = {"case_id": "CASE", "process_id": "PROC", "skill_id": "SKILL"}[field]
+                context[field] = f"{prefix}-" + now_iso().replace(":", "").replace("-", "").replace("T", "-")[:16]
+            elif field == "occurred_at":
+                context[field] = now_iso()[:10]
+            elif field == "owner":
+                context[field] = "未指定"
+            elif field == "severity":
+                context[field] = "中"
             elif field == "aliases" and etype in ("term", "system"):
                 context[field] = []
             else:

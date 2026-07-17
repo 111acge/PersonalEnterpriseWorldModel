@@ -4,7 +4,7 @@
 用法：
     python3 start.py
 
-无界面运行管线：
+无界面运行本体生成：
     python3 start.py --pipeline [--no-git] [--reset] [--status]
 
 基于 Flask + pywebview，无需外部浏览器。所有数据保存在项目目录的 data/ 下。
@@ -35,7 +35,7 @@ def _show_fatal_error(msg: str):
 
 def main():
     parser = argparse.ArgumentParser(description="个人企业世界模型启动器")
-    parser.add_argument("--pipeline", action="store_true", help="无界面运行 AI 管线")
+    parser.add_argument("--pipeline", action="store_true", help="无界面运行本体生成")
     args, extra = parser.parse_known_args()
 
     if args.pipeline:

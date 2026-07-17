@@ -6,17 +6,37 @@ const app = {
     selectedDocs: new Set(),
     providers: {},
     ocrProviders: {},
+    // 笔记工作台状态
+    notes: [],
+    currentNotePath: null,
+    noteFilterDir: '',
+    noteFilterTag: '',
+    noteDirty: false,
+
+    // 可选主题色
+    ACCENTS: [
+        { name: '靛蓝', value: '#4f46e5' },
+        { name: '湛蓝', value: '#2563eb' },
+        { name: '青色', value: '#0d9488' },
+        { name: '翠绿', value: '#16a34a' },
+        { name: '橙色', value: '#ea580c' },
+        { name: '红色', value: '#dc2626' },
+        { name: '紫色', value: '#9333ea' },
+        { name: '玫红', value: '#db2777' },
+    ],
 
     init() {
         this.bindNav();
         this.bindTheme();
         this.bindWindowControls();
+        this.bindSidebar();
         this.bindChat();
         this.bindSearch();
-        this.bindInbox();
+        this.bindNotes();
         this.bindDocuments();
         this.bindPipeline();
         this.bindSettings();
+        this.bindAppearance();
         this.bindModal();
         this.loadStats();
         this.loadGreeting();
@@ -24,6 +44,7 @@ const app = {
         this.loadOCRConfig();
         this.loadProfile();
         this.loadPrompt();
+        this.loadTags();
         this.navigate('dashboard');
     },
 
@@ -33,11 +54,12 @@ const app = {
         document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `page-${page}`));
         const titles = {
             dashboard: '概览', chat: '对话', search: '检索',
-            inbox: '速记', documents: '文档管理', pipeline: '管线', settings: '设置'
+            inbox: '笔记', documents: '知识库文档', pipeline: '本体生成', settings: '设置'
         };
         document.getElementById('page-title').textContent = titles[page] || page;
         if (page === 'documents') this.loadDocuments();
         if (page === 'pipeline') this.refreshPipelineStatus();
+        if (page === 'inbox') this.loadNotes();
     },
 
     bindNav() {
@@ -49,61 +71,210 @@ const app = {
         });
     },
 
+    // ========== 主题（亮色/暗色 + 主题色） ==========
+    _applyThemeAttr(isDark) {
+        if (isDark) document.documentElement.setAttribute('data-theme', 'dark');
+        else document.documentElement.removeAttribute('data-theme');
+        const use = document.getElementById('theme-icon-use');
+        if (use) use.setAttribute('href', isDark ? '#i-sun' : '#i-moon');
+        const light = document.getElementById('theme-mode-light');
+        const dark = document.getElementById('theme-mode-dark');
+        if (light && dark) {
+            light.classList.toggle('active', !isDark);
+            dark.classList.toggle('active', isDark);
+        }
+        // 主题色在暗色下需要重新计算亮度
+        this.applyAccent(localStorage.getItem('accent') || this.ACCENTS[0].value, false);
+    },
+
     bindTheme() {
         const toggle = document.getElementById('theme-toggle');
         const saved = localStorage.getItem('theme');
-        if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-        toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
-        toggle.addEventListener('click', () => {
-            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            if (isDark) {
-                document.documentElement.removeAttribute('data-theme');
-                localStorage.setItem('theme', 'light');
-                toggle.textContent = '🌙';
-            } else {
-                document.documentElement.setAttribute('data-theme', 'dark');
-                localStorage.setItem('theme', 'dark');
-                toggle.textContent = '☀️';
-            }
-        });
+        this._applyThemeAttr(saved === 'dark');
+        if (toggle) {
+            toggle.addEventListener('click', () => {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                this._applyThemeAttr(!isDark);
+                localStorage.setItem('theme', !isDark ? 'dark' : 'light');
+            });
+        }
     },
 
+    // 计算颜色变体
+    _hexToRgb(hex) {
+        const m = hex.replace('#', '');
+        return [parseInt(m.slice(0, 2), 16), parseInt(m.slice(2, 4), 16), parseInt(m.slice(4, 6), 16)];
+    },
+
+    _mix(hex, target, ratio) {
+        const [r, g, b] = this._hexToRgb(hex);
+        const [tr, tg, tb] = this._hexToRgb(target);
+        const mix = (a, t) => Math.round(a + (t - a) * ratio);
+        return `rgb(${mix(r, tr)}, ${mix(g, tg)}, ${mix(b, tb)})`;
+    },
+
+    applyAccent(hex, persist = true) {
+        const root = document.documentElement;
+        const isDark = root.getAttribute('data-theme') === 'dark';
+        const [r, g, b] = this._hexToRgb(hex);
+        const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        const shown = isDark ? this._mix(hex, '#ffffff', 0.18) : hex;
+        root.style.setProperty('--accent', shown);
+        root.style.setProperty('--accent-hover', this._mix(shown.startsWith('#') ? shown : hex, isDark ? '#ffffff' : '#000000', isDark ? 0.22 : 0.14));
+        root.style.setProperty('--accent-soft', `rgba(${r}, ${g}, ${b}, ${isDark ? 0.16 : 0.10})`);
+        root.style.setProperty('--accent-text', luminance > 0.62 && !isDark ? '#1c2333' : '#ffffff');
+        if (persist) localStorage.setItem('accent', hex);
+        document.querySelectorAll('.accent-swatch').forEach(s =>
+            s.classList.toggle('active', s.dataset.value === hex));
+    },
+
+    bindAppearance() {
+        const wrap = document.getElementById('accent-swatches');
+        if (wrap) {
+            wrap.innerHTML = '';
+            this.ACCENTS.forEach(a => {
+                const btn = document.createElement('button');
+                btn.className = 'accent-swatch';
+                btn.dataset.value = a.value;
+                btn.title = a.name;
+                btn.style.background = a.value;
+                btn.style.color = a.value;
+                btn.addEventListener('click', () => this.applyAccent(a.value));
+                wrap.appendChild(btn);
+            });
+        }
+        const light = document.getElementById('theme-mode-light');
+        const dark = document.getElementById('theme-mode-dark');
+        if (light) light.addEventListener('click', () => {
+            this._applyThemeAttr(false);
+            localStorage.setItem('theme', 'light');
+        });
+        if (dark) dark.addEventListener('click', () => {
+            this._applyThemeAttr(true);
+            localStorage.setItem('theme', 'dark');
+        });
+        // 初始化主题色与模式卡片状态
+        this.applyAccent(localStorage.getItem('accent') || this.ACCENTS[0].value, false);
+        this._applyThemeAttr(document.documentElement.getAttribute('data-theme') === 'dark');
+    },
+
+    // ========== 窗口控制 ==========
     bindWindowControls() {
         const minimizeBtn = document.getElementById('window-minimize');
         const maximizeBtn = document.getElementById('window-maximize');
         const closeBtn = document.getElementById('window-close');
         const dragArea = document.getElementById('titlebar-drag');
 
-        const api = window.pywebview && window.pywebview.api;
+        const getApi = () => (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+        let maximized = false;
+        const updateMaxIcon = () => {
+            if (!maximizeBtn) return;
+            const use = maximizeBtn.querySelector('use');
+            if (use) use.setAttribute('href', maximized ? '#i-restore' : '#i-max');
+            maximizeBtn.title = maximized ? '还原' : '最大化';
+        };
 
         if (minimizeBtn) {
-            minimizeBtn.addEventListener('click', () => {
-                if (api && api.minimize_window) api.minimize_window();
-            });
+            minimizeBtn.onclick = () => {
+                const api = getApi();
+                if (api && api.minimize_window) {
+                    api.minimize_window();
+                } else {
+                    console.warn('pywebview api 不可用，无法最小化');
+                }
+            };
         }
 
         if (maximizeBtn) {
-            maximizeBtn.addEventListener('click', () => {
-                if (api && api.maximize_window) api.maximize_window();
-            });
+            maximizeBtn.onclick = () => {
+                const api = getApi();
+                if (api && api.maximize_window) {
+                    api.maximize_window();
+                    maximized = !maximized;
+                    updateMaxIcon();
+                } else {
+                    console.warn('pywebview api 不可用，无法最大化');
+                }
+            };
         }
 
         if (closeBtn) {
-            closeBtn.addEventListener('click', () => {
+            closeBtn.onclick = () => {
+                const api = getApi();
                 if (api && api.close_window) {
                     api.close_window();
                 } else {
                     window.close();
                 }
-            });
+            };
         }
 
         // 标题栏双击最大化/还原
         if (dragArea) {
-            dragArea.addEventListener('dblclick', () => {
-                if (api && api.maximize_window) api.maximize_window();
-            });
+            dragArea.ondblclick = () => {
+                const api = getApi();
+                if (api && api.maximize_window) {
+                    api.maximize_window();
+                    maximized = !maximized;
+                    updateMaxIcon();
+                }
+            };
         }
+    },
+
+    // ========== 侧边栏（折叠 / 笔记本 / 标签） ==========
+    bindSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const btn = document.getElementById('sidebar-collapse');
+        if (!sidebar || !btn) return;
+
+        if (localStorage.getItem('sidebar_collapsed') === '1') {
+            sidebar.classList.add('collapsed');
+            btn.title = '展开侧边栏';
+        }
+
+        btn.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+            const collapsed = sidebar.classList.contains('collapsed');
+            localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0');
+            btn.title = collapsed ? '展开侧边栏' : '折叠侧边栏';
+        });
+
+        // 笔记本目录筛选 → 跳转笔记页；台账入口 → 知识库文档页
+        document.querySelectorAll('.side-link').forEach(el => {
+            el.addEventListener('click', () => {
+                if (el.dataset.goto) {
+                    this.navigate(el.dataset.goto);
+                    return;
+                }
+                this.noteFilterDir = el.dataset.dir || '';
+                this.noteFilterTag = '';
+                this.syncNoteFilterChips();
+                this.navigate('inbox');
+            });
+        });
+    },
+
+    async loadTags() {
+        const cloud = document.getElementById('tag-cloud');
+        if (!cloud) return;
+        const data = await this.api('/api/tags');
+        if (!data.success || !data.data.length) {
+            cloud.innerHTML = '<span class="tag-empty">暂无标签</span>';
+            return;
+        }
+        cloud.innerHTML = '';
+        data.data.slice(0, 12).forEach(t => {
+            const chip = document.createElement('button');
+            chip.className = 'tag-chip';
+            chip.textContent = `#${t.name} ${t.count}`;
+            chip.addEventListener('click', () => {
+                this.noteFilterTag = t.name;
+                this.noteFilterDir = '';
+                this.navigate('inbox');
+            });
+            cloud.appendChild(chip);
+        });
     },
 
     async api(url, options = {}) {
@@ -351,24 +522,369 @@ const app = {
         });
     },
 
-    // ========== Inbox ==========
-    bindInbox() {
-        document.getElementById('inbox-save').addEventListener('click', async () => {
-            const title = document.getElementById('inbox-title').value;
-            const content = document.getElementById('inbox-content').value;
-            this.setLoading('#inbox-save', true);
-            const data = await this.api('/api/inbox', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, content })
-            });
-            this.setLoading('#inbox-save', false);
-            if (data.success) {
-                document.getElementById('inbox-title').value = '';
-                document.getElementById('inbox-content').value = '';
-                this.showToast('已投递到：' + data.path, 'success');
+    // ========== 笔记工作台 ==========
+    bindNotes() {
+        document.getElementById('inbox-save').addEventListener('click', () => this.saveNote());
+        document.getElementById('note-new').addEventListener('click', () => this.newNote());
+        document.getElementById('note-refresh').addEventListener('click', () => this.loadNotes());
+        document.getElementById('note-delete').addEventListener('click', () => this.deleteNote());
+        document.getElementById('note-search').addEventListener('input', () => this.renderNoteList());
+
+        const editor = document.getElementById('inbox-content');
+        editor.addEventListener('input', () => {
+            this.noteDirty = true;
+            this.updateNoteStatus();
+            if (document.getElementById('note-body-wrap').classList.contains('show-preview')) {
+                this.renderPreview();
             }
         });
+        document.getElementById('inbox-title').addEventListener('input', () => { this.noteDirty = true; });
+
+        // 编辑 / 预览切换
+        document.querySelectorAll('#note-view-toggle button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('#note-view-toggle button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const wrap = document.getElementById('note-body-wrap');
+                if (btn.dataset.view === 'preview') {
+                    wrap.classList.add('show-preview');
+                    this.renderPreview();
+                } else {
+                    wrap.classList.remove('show-preview');
+                }
+            });
+        });
+
+        // 列表来源筛选 chips：全部 / 速记 / AI 提炼
+        document.querySelectorAll('#note-filter-chips .chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                this.noteFilterDir = chip.dataset.dir || '';
+                this.noteFilterTag = '';
+                this.syncNoteFilterChips();
+                this.loadNotes();
+            });
+        });
+
+        // Markdown 工具栏
+        document.querySelectorAll('.md-btn').forEach(btn => {
+            btn.addEventListener('click', () => this.insertMarkdown(btn.dataset.md));
+        });
+
+        // 区域拖拽调整
+        this.bindPaneResizer();
+        const savedW = localStorage.getItem('note_list_width');
+        if (savedW) document.getElementById('note-list-pane').style.width = savedW + 'px';
+
+        // Ctrl+S 保存
+        editor.addEventListener('keydown', e => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                this.saveNote();
+            }
+        });
+    },
+
+    bindPaneResizer() {
+        const resizer = document.getElementById('pane-resizer');
+        const pane = document.getElementById('note-list-pane');
+        if (!resizer || !pane) return;
+        let startX = 0, startW = 0;
+
+        const onMove = e => {
+            const w = Math.min(480, Math.max(180, startW + e.clientX - startX));
+            pane.style.width = w + 'px';
+        };
+        const onUp = e => {
+            resizer.classList.remove('dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            localStorage.setItem('note_list_width', parseInt(pane.style.width) || 260);
+        };
+        resizer.addEventListener('mousedown', e => {
+            startX = e.clientX;
+            startW = pane.offsetWidth;
+            resizer.classList.add('dragging');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            e.preventDefault();
+        });
+    },
+
+    async loadNotes() {
+        let url = '/api/notes?';
+        if (this.noteFilterTag) url += `tag=${encodeURIComponent(this.noteFilterTag)}&`;
+        const data = await this.api(url);
+        if (!data.success) return;
+        this.notes = data.data.filter(n => this._matchNoteDir(n));
+        this.renderNoteList();
+        this.updateNotebookCounts();
+    },
+
+    updateNotebookCounts() {
+        const all = this.notes.length;
+        const inbox = this.notes.filter(n => n.dir.startsWith('00-Inbox')).length;
+        const generated = all - inbox;
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        if (!this.noteFilterDir && !this.noteFilterTag) {
+            set('nb-count-all', all);
+            set('nb-count-inbox', inbox);
+            set('nb-count-theory', generated);
+        }
+    },
+
+    syncNoteFilterChips() {
+        document.querySelectorAll('#note-filter-chips .chip').forEach(c =>
+            c.classList.toggle('active', (c.dataset.dir || '') === this.noteFilterDir));
+    },
+
+    // 笔记来源：速记（用户手写） / AI 提炼（本体生成自动产出，分布于各知识层）
+    _noteSource(dir) {
+        return dir && dir.startsWith('00-Inbox')
+            ? { label: '速记', cls: 'inbox' }
+            : { label: 'AI 提炼', cls: 'ai' };
+    },
+
+    // 目录筛选匹配：generated 表示所有非速记箱的 AI 提炼内容
+    _matchNoteDir(n) {
+        if (!this.noteFilterDir) return true;
+        if (this.noteFilterDir === 'generated') return !n.dir.startsWith('00-Inbox');
+        return n.dir.startsWith(this.noteFilterDir);
+    },
+
+    renderNoteList() {
+        const list = document.getElementById('note-list');
+        const keyword = (document.getElementById('note-search').value || '').trim().toLowerCase();
+        const notes = keyword
+            ? this.notes.filter(n => n.name.toLowerCase().includes(keyword) || n.preview.toLowerCase().includes(keyword))
+            : this.notes;
+        list.innerHTML = '';
+        if (!notes.length) {
+            const hints = {
+                '00-Inbox': '速记箱为空<br>点击右上角「+」写下第一条笔记',
+                'generated': '暂无 AI 提炼笔记<br>在「本体生成」页点击「运行本体生成」后，<br>会自动从你的速记中提炼生成',
+            };
+            list.innerHTML = `<div class="note-list-empty">${hints[this.noteFilterDir] || '暂无笔记<br>点击右上角「+」新建一篇'}</div>`;
+            return;
+        }
+        notes.forEach(n => {
+            const src = this._noteSource(n.dir);
+            const item = document.createElement('div');
+            item.className = 'note-item' + (n.path === this.currentNotePath ? ' active' : '');
+            item.innerHTML = `
+                <div class="note-item-title">${this.escapeHtml(n.name)}</div>
+                <div class="note-item-preview">${this.escapeHtml(n.preview || '(空笔记)')}</div>
+                <div class="note-item-meta"><span class="note-src-badge ${src.cls}">${src.label}</span><span>${n.updated_at}</span>${n.tags.length ? `<span>${n.tags.map(t => '#' + this.escapeHtml(t)).join(' ')}</span>` : ''}</div>
+            `;
+            item.addEventListener('click', () => this.openNote(n.path));
+            list.appendChild(item);
+        });
+    },
+
+    async openNote(path) {
+        const data = await this.api(`/api/notes/content?path=${encodeURIComponent(path)}`);
+        if (!data.success) return;
+        this.currentNotePath = data.data.path;
+        document.getElementById('inbox-title').value = data.data.name;
+        document.getElementById('inbox-content').value = data.data.content;
+        this.noteDirty = false;
+        document.getElementById('note-delete').style.display = '';
+        this.renderNoteList();
+        this.updateNoteStatus();
+        if (document.getElementById('note-body-wrap').classList.contains('show-preview')) {
+            this.renderPreview();
+        }
+    },
+
+    newNote() {
+        this.currentNotePath = null;
+        document.getElementById('inbox-title').value = '';
+        document.getElementById('inbox-content').value = '';
+        this.noteDirty = false;
+        document.getElementById('note-delete').style.display = 'none';
+        this.renderNoteList();
+        this.updateNoteStatus();
+        document.getElementById('inbox-title').focus();
+    },
+
+    async saveNote() {
+        const title = document.getElementById('inbox-title').value;
+        const content = document.getElementById('inbox-content').value;
+        if (!title.trim() && !content.trim()) {
+            this.showToast('笔记内容为空', 'error');
+            return;
+        }
+        this.setLoading('#inbox-save', true);
+        const data = await this.api('/api/notes/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: this.currentNotePath, title, content })
+        });
+        this.setLoading('#inbox-save', false);
+        if (data.success) {
+            this.currentNotePath = data.path;
+            this.noteDirty = false;
+            document.getElementById('note-delete').style.display = '';
+            document.getElementById('note-save-state').textContent = '已保存 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            this.showToast('笔记已保存', 'success');
+            this.loadNotes();
+            this.loadTags();
+        }
+    },
+
+    async deleteNote() {
+        if (!this.currentNotePath) return;
+        if (!confirm('确定删除这篇笔记吗？此操作不可恢复。')) return;
+        const data = await this.api('/api/notes/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: this.currentNotePath })
+        });
+        if (data.success) {
+            this.showToast('笔记已删除', 'success');
+            this.newNote();
+            this.loadNotes();
+            this.loadTags();
+        }
+    },
+
+    updateNoteStatus() {
+        const content = document.getElementById('inbox-content').value;
+        const pathEl = document.getElementById('note-current-path');
+        if (this.currentNotePath) {
+            const src = this._noteSource(this.currentNotePath);
+            pathEl.textContent = `${src.label} · ${this.currentNotePath}`;
+        } else {
+            pathEl.textContent = '新笔记（保存到速记箱）';
+        }
+        const cjk = (content.match(/[\u4e00-\u9fff]/g) || []).length;
+        const words = (content.replace(/[\u4e00-\u9fff]/g, ' ').match(/\S+/g) || []).length;
+        document.getElementById('note-word-count').textContent = `${cjk + words} 字`;
+        if (this.noteDirty) {
+            document.getElementById('note-save-state').textContent = '未保存';
+        }
+    },
+
+    insertMarkdown(type) {
+        const editor = document.getElementById('inbox-content');
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        const selected = editor.value.slice(start, end);
+        const lineStart = editor.value.lastIndexOf('\n', start - 1) + 1;
+        let before = '', after = '', replacement = null, cursorOffset = 0;
+
+        switch (type) {
+            case 'bold': before = '**'; after = '**'; break;
+            case 'italic': before = '*'; after = '*'; break;
+            case 'code':
+                replacement = `\n\`\`\`\n${selected || '代码'}\n\`\`\`\n`;
+                cursorOffset = 5;
+                break;
+            case 'quote': before = '\n> '; break;
+            case 'heading': before = '\n## '; break;
+            case 'todo': before = '\n- [ ] '; break;
+            case 'list': before = '\n- '; break;
+        }
+
+        if (replacement !== null) {
+            editor.setRangeText(replacement, lineStart, end, 'end');
+        } else {
+            editor.setRangeText(before + selected + after, start, end, 'end');
+        }
+        editor.focus();
+        this.noteDirty = true;
+        this.updateNoteStatus();
+        if (document.getElementById('note-body-wrap').classList.contains('show-preview')) {
+            this.renderPreview();
+        }
+    },
+
+    renderPreview() {
+        const content = document.getElementById('inbox-content').value;
+        document.getElementById('note-preview').innerHTML = this.renderMarkdown(content);
+    },
+
+    // 轻量 Markdown 渲染：标题/加粗/斜体/行内代码/代码块/引用/待办/列表/链接/分隔线
+    renderMarkdown(src) {
+        const escape = s => this.escapeHtml(s);
+        const codeBlocks = [];
+        // 先提取代码块，避免内部被二次处理
+        let text = src.replace(/```(\w*)\n([\s\S]*?)(?:```|$)/g, (m, lang, code) => {
+            codeBlocks.push(`<pre><code class="lang-${escape(lang)}">${escape(code.replace(/\n$/, ''))}</code></pre>`);
+            return ` CODE${codeBlocks.length - 1} `;
+        });
+
+        const inline = s => {
+            s = escape(s);
+            s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+            s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+            s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+            return s;
+        };
+
+        const lines = text.split('\n');
+        const html = [];
+        let listType = null; // ul | ol | task
+        const closeList = () => {
+            if (listType) { html.push(`</${listType === 'task' ? 'ul' : listType}>`); listType = null; }
+        };
+
+        for (const raw of lines) {
+            const line = raw;
+            const trimmed = line.trim();
+
+            if (/^ CODE\d+ $/.test(trimmed)) {
+                closeList();
+                html.push(codeBlocks[parseInt(trimmed.slice(4, -1))]);
+                continue;
+            }
+            if (!trimmed) { closeList(); continue; }
+
+            const heading = trimmed.match(/^(#{1,4})\s+(.*)$/);
+            if (heading) {
+                closeList();
+                const level = heading[1].length;
+                html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+                continue;
+            }
+            if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
+                closeList();
+                html.push('<hr>');
+                continue;
+            }
+            if (trimmed.startsWith('>')) {
+                closeList();
+                html.push(`<blockquote><p>${inline(trimmed.replace(/^>\s?/, ''))}</p></blockquote>`);
+                continue;
+            }
+            const task = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.*)$/);
+            if (task) {
+                if (listType !== 'task') { closeList(); html.push('<ul>'); listType = 'task'; }
+                const done = task[1].toLowerCase() === 'x';
+                html.push(`<li class="task-item${done ? ' done' : ''}"><input type="checkbox" disabled${done ? ' checked' : ''}><span class="task-text">${inline(task[2])}</span></li>`);
+                continue;
+            }
+            const ul = trimmed.match(/^[-*]\s+(.*)$/);
+            if (ul) {
+                if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
+                html.push(`<li>${inline(ul[1])}</li>`);
+                continue;
+            }
+            const ol = trimmed.match(/^\d+[.)]\s+(.*)$/);
+            if (ol) {
+                if (listType !== 'ol') { closeList(); html.push('<ol>'); listType = 'ol'; }
+                html.push(`<li>${inline(ol[1])}</li>`);
+                continue;
+            }
+            closeList();
+            html.push(`<p>${inline(trimmed)}</p>`);
+        }
+        closeList();
+        return html.join('\n') || '<p style="color:var(--text-tertiary)">暂无内容</p>';
     },
 
     // ========== Documents ==========
@@ -418,7 +934,7 @@ const app = {
                 <td>${this.escapeHtml(d.path)}</td>
                 <td>${d.entity_type || ''}</td>
                 <td>${d.updated_at || ''}</td>
-                <td>${d.deleted_at ? '回收站' : '正常'}</td>
+                <td><span class="badge ${d.deleted_at ? 'danger' : 'success'}">${d.deleted_at ? '回收站' : '正常'}</span></td>
                 <td>${this.escapeHtml(d.source || '')}</td>
             `;
             tr.querySelector('.doc-checkbox').addEventListener('change', e => this.toggleDoc(d.path, e.target.checked));
@@ -459,7 +975,11 @@ const app = {
 
     // ========== Pipeline ==========
     bindPipeline() {
-        document.getElementById('pipeline-run').addEventListener('click', () => this.runPipeline('/api/pipeline/run', '管线'));
+        document.getElementById('pipeline-run').addEventListener('click', () => this.runPipeline('/api/pipeline/run', '本体生成'));
+        document.getElementById('pipeline-run-reset').addEventListener('click', () => {
+            if (!confirm('将清除所有速记的已处理标记并重新提炼，旧的手动修改可能被覆盖，确定继续吗？')) return;
+            this.runPipeline('/api/pipeline/run', '本体生成（重置）', ['--no-git', '--no-ocr', '--reset']);
+        });
         document.getElementById('pipeline-ocr').addEventListener('click', () => this.runPipeline('/api/ocr/run', 'OCR'));
         document.getElementById('pipeline-rebuild').addEventListener('click', () => this.runPipeline('/api/vector/rebuild', '向量索引重建'));
         document.getElementById('pipeline-refresh').addEventListener('click', () => this.refreshPipelineStatus());
@@ -467,11 +987,11 @@ const app = {
         document.getElementById('watcher-stop').addEventListener('click', () => this.watcherAction('/api/watcher/stop', 'stop'));
     },
 
-    async runPipeline(url, name) {
+    async runPipeline(url, name, options = ['--no-git', '--no-ocr']) {
         const data = await this.api(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ options: ['--no-git', '--no-ocr'] })
+            body: JSON.stringify({ options })
         });
         if (data.success) {
             this.startPipelinePolling();
@@ -520,6 +1040,7 @@ const app = {
         if (data.success) {
             const label = document.getElementById('watcher-status');
             label.textContent = data.data.running ? '运行中' : '未开启';
+            label.className = 'badge ' + (data.data.running ? 'success' : '');
         }
     },
 
@@ -558,48 +1079,48 @@ const app = {
         document.getElementById('backup-dir').addEventListener('click', () => this.backupDir());
 
         // 诊断面板
-        document.getElementById('crash-save').addEventListener('click', () => this.saveCrashConfig());
         document.getElementById('crash-view-logs').addEventListener('click', () => this.viewCrashLogs());
         document.getElementById('metrics-refresh').addEventListener('click', () => this.refreshMetrics());
-        this.loadCrashConfig();
         this.loadTorchStatus();
     },
 
     async loadTorchStatus() {
         const el = document.getElementById('torch-status');
-        const data = await this.api('/api/torch/status');
-        if (data.success) {
-            const d = data.data;
-            el.textContent = `torch ${d.torch_version || '-'} | 后端: ${d.backend} | bge 模型: ${d.bge_model_files_ok ? '完整' : '缺失'} | 状态: ${d.healthy ? '健康' : '异常'}`;
-            el.style.color = d.healthy ? 'var(--success)' : 'var(--danger)';
-        } else {
+        const data = await this.api('/api/environment/status');
+        if (!data.success) {
             el.textContent = '获取失败：' + (data.error || '未知错误');
-        }
-    },
-
-    async loadCrashConfig() {
-        const data = await this.api('/api/config/crash');
-        if (data.success) {
-            document.getElementById('crash-reporting-enabled').checked = data.data.crash_reporting_enabled;
-        }
-    },
-
-    async saveCrashConfig() {
-        const enabled = document.getElementById('crash-reporting-enabled').checked;
-        const data = await this.api('/api/config/crash', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ crash_reporting_enabled: enabled })
-        });
-        const el = document.getElementById('crash-status');
-        if (data.success) {
-            el.textContent = '已保存';
-            el.style.color = 'var(--success)';
-            this.showToast('崩溃上报设置已保存', 'success');
-        } else {
-            el.textContent = '保存失败：' + (data.error || '');
             el.style.color = 'var(--danger)';
+            return;
         }
+        const d = data.data;
+        const torch = d.torch || {};
+        const ocr = d.ocr || {};
+        const watchdog = d.watchdog || {};
+
+        const rows = [
+            ['PyTorch 版本', torch.torch_version || '-'],
+            ['后端', torch.backend || '-'],
+            ['CPU 可用', torch.cpu_available ? '是' : '否'],
+            ['CUDA 可用', torch.cuda_available ? '是' : '否'],
+            ['sentence-transformers', torch.sentence_transformers_available ? '是' : '否'],
+            ['bge 模型文件', torch.bge_model_files_ok ? '完整' : '缺失'],
+            ['bge 模型路径', torch.bge_model_path || '-'],
+            ['OCR 模式', ocr.mode || '-'],
+            ['OCR 可用', ocr.available ? '是' : '否'],
+            ['OCR 版本', ocr.version || '-'],
+            ['OCR 错误', ocr.error || '-'],
+            ['watchdog 已安装', watchdog.installed ? '是' : '否'],
+            ['watchdog 版本', watchdog.version || '-'],
+            ['watchdog 运行中', watchdog.running ? '是' : '否'],
+            ['watchdog 监控目录', watchdog.watch_dir || '-'],
+            ['整体健康', d.healthy ? '健康' : '异常'],
+        ];
+
+        el.innerHTML = rows.map(([k, v]) => {
+            if (v === '-') return '';
+            return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span>${this.escapeHtml(k)}</span><span>${this.escapeHtml(String(v))}</span></div>`;
+        }).join('');
+        el.style.color = d.healthy ? 'var(--success)' : 'var(--danger)';
     },
 
     async viewCrashLogs() {

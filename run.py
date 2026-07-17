@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI 管线运行入口。
+"""本体生成运行入口。
 
 因为 pewm 是合法 Python 包名，本入口脚本直接转发到 pewm/processors/__main__.py。
 """

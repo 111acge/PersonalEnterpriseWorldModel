@@ -26,8 +26,18 @@ logger = get_logger(__name__)
 
 def check_pyinstaller():
     if shutil.which("pyinstaller") is None:
-        logger.error("未找到 pyinstaller。请运行： pip install pyinstaller")
-        sys.exit(1)
+        try:
+            import PyInstaller  # noqa: F401
+        except ImportError:
+            logger.error("未找到 pyinstaller。请运行： pip install pyinstaller")
+            sys.exit(1)
+
+
+def _pyinstaller_cmd() -> list:
+    """优先使用 PATH 中的 pyinstaller，否则回退到 python -m PyInstaller。"""
+    if shutil.which("pyinstaller"):
+        return ["pyinstaller"]
+    return [sys.executable, "-m", "PyInstaller"]
 
 
 def verify_build_artifact(exe_path: Path) -> dict:
@@ -91,7 +101,7 @@ def main():
     check_pyinstaller()
 
     logger.info("开始打包个人企业世界模型...")
-    cmd = ["pyinstaller", "build.spec", "--clean", "--noconfirm"]
+    cmd = _pyinstaller_cmd() + ["build.spec", "--clean", "--noconfirm"]
     result = subprocess.run(cmd, cwd=ROOT)
 
     if result.returncode != 0:

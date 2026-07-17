@@ -1,4 +1,4 @@
-"""AI 管线入口。"""
+"""本体生成入口。"""
 import argparse
 import subprocess
 from pathlib import Path
@@ -146,7 +146,16 @@ def run_pipeline(
     no_vector: bool = False,
     no_ocr: bool = False,
 ):
-    logger.info("启动 AI 管线：%s", ROOT)
+    logger.info("启动本体生成：%s", ROOT)
+
+    # 前置检查：本体提炼必须经过 LLM，LLM 不可用则拒绝执行
+    from pewm.processors.llm_client import check_llm_ready
+    llm_ok, llm_msg = check_llm_ready()
+    if not llm_ok:
+        logger.error(llm_msg)
+        print(llm_msg)
+        return
+
     # 立即初始化数据库，确保 data/ 目录和表始终被创建
     init_db()
     from pewm.paths import DATA_DIR
@@ -276,7 +285,7 @@ def show_status():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="个人企业世界模型 AI 管线")
+    parser = argparse.ArgumentParser(description="个人企业世界模型 本体生成")
     parser.add_argument("--reset", action="store_true", help="重置处理标记并重建索引")
     parser.add_argument("--skip-errors", action="store_true", help="跳过冲突文件继续处理")
     parser.add_argument("--no-git", action="store_true", help="禁用 Git 自动提交")
