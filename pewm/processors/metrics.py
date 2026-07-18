@@ -38,36 +38,50 @@ def _connection() -> sqlite3.Connection:
 
 
 def close_connection() -> None:
-    """显式关闭当前线程的指标连接。"""
+    """显式关闭当前线程的指标连接，并重置建表标志（供切换数据库时使用）。"""
+    global _table_initialized
     conn = getattr(_thread_local, "metrics_conn", None)
     if conn is not None:
         conn.close()
         _thread_local.metrics_conn = None
+    _table_initialized = False
+
+
+# 模块级标志：确保 init_metrics_table() 的建表语句只执行一次
+_table_initialized = False
+_table_init_lock = threading.Lock()
 
 
 def init_metrics_table() -> None:
-    """初始化指标表（与业务表共存于 world-model.db）。"""
-    conn = _connection()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS metrics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event TEXT NOT NULL,
-            duration_ms INTEGER,
-            success BOOLEAN NOT NULL DEFAULT 1,
-            error_msg TEXT,
-            meta TEXT,
-            created_at TEXT NOT NULL
+    """初始化指标表（与业务表共存于 world-model.db）。幂等，仅首次真正执行。"""
+    global _table_initialized
+    if _table_initialized:
+        return
+    with _table_init_lock:
+        if _table_initialized:
+            return
+        conn = _connection()
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event TEXT NOT NULL,
+                duration_ms INTEGER,
+                success BOOLEAN NOT NULL DEFAULT 1,
+                error_msg TEXT,
+                meta TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_metrics_event_time
-        ON metrics(event, created_at)
-        """
-    )
-    conn.commit()
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_metrics_event_time
+            ON metrics(event, created_at)
+            """
+        )
+        conn.commit()
+        _table_initialized = True
 
 
 def record(

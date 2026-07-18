@@ -25,6 +25,7 @@ pywebview>=6.0
 pyinstaller>=6.0
 
 # OCR 图片文字识别（可选，首次运行自动下载模型 ~150MB）
-# 如需 OCR，请手动执行：pip install paddlepaddle paddleocr
+# 如需 OCR，请手动执行：pip install paddlepaddle "paddleocr>=2.7.0,<3.0"
+# 注意：PaddleOCR 3.x 初始化参数不兼容（use_angle_cls/show_log 已移除），必须安装 2.x
 # paddlepaddle>=2.5.0
-# paddleocr>=2.7.0
+# paddleocr>=2.7.0,<3.0

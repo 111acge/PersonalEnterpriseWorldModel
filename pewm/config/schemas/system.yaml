@@ -8,6 +8,9 @@ required_frontmatter:
   - source
   - updated_at
 content_template: |
+  ---
+  {{ frontmatter }}
+  ---
   # {{ name }}
 
   > 类型：{{ type }} | 别名：{{ aliases | join(', ') }}

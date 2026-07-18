@@ -23,6 +23,27 @@ ROOT = Path(__file__).resolve().parent
 setup_logging()
 logger = get_logger(__name__)
 
+# 需要打包的内容目录（只打空骨架，不打用户真实笔记）
+CONTENT_DIRS = ["00-Inbox", "10-Theory", "20-Ontology", "30-Instances", "40-Skills", "90-Meta"]
+# build.spec datas 使用的空目录骨架 staging 位置
+STAGING_DIR = ROOT / "build" / "staging"
+
+
+def prepare_staging(staging_dir: Path = None) -> Path:
+    """生成空目录骨架 staging（仅含 .gitkeep），避免把用户私人笔记打进 exe。
+
+    build.spec 的 datas 指向该 staging 目录而非真实内容目录。
+    """
+    staging_dir = staging_dir or STAGING_DIR
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    for d in CONTENT_DIRS:
+        target = staging_dir / d
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".gitkeep").write_text("", encoding="utf-8")
+    logger.info("已生成空目录骨架 staging：%s", staging_dir)
+    return staging_dir
+
 
 def check_pyinstaller():
     if shutil.which("pyinstaller") is None:
@@ -71,14 +92,31 @@ def verify_build_artifact(exe_path: Path) -> dict:
     else:
         report["hiddenimports_ok"] = True
 
-    # 2. 检查 bge 模型文件
+    # 2. 检查 bge 模型文件（存在性 + Git LFS 指针/大小下限校验）
     bge_dir = ROOT / "bge-model"
     required_files = ["config.json", "pytorch_model.bin", "tokenizer.json", "vocab.txt"]
     missing_files = [f for f in required_files if not (bge_dir / f).exists()]
     if missing_files:
         report["errors"].append(f"bge-model 缺少文件: {missing_files}")
     else:
-        report["bge_model_files_ok"] = True
+        lfs_hint = "（疑似 Git LFS 指针文件，请先执行：git lfs install && git lfs pull）"
+        bad_files = []
+        for f in required_files:
+            fp = bge_dir / f
+            with fp.open("rb") as fh:
+                head = fh.read(64)
+            if head.startswith(b"version https://git-lfs"):
+                bad_files.append(f"bge-model/{f} 是 Git LFS 指针文件{lfs_hint}")
+        bin_file = bge_dir / "pytorch_model.bin"
+        bin_size = bin_file.stat().st_size
+        if bin_size < 1024 * 1024:
+            bad_files.append(
+                f"bge-model/pytorch_model.bin 大小异常（{bin_size} 字节 < 1MB）{lfs_hint}"
+            )
+        if bad_files:
+            report["errors"].extend(bad_files)
+        else:
+            report["bge_model_files_ok"] = True
 
     # 3. 当前环境 torch 可导入性（打包前的环境自检）
     try:
@@ -99,6 +137,9 @@ def verify_build_artifact(exe_path: Path) -> dict:
 
 def main():
     check_pyinstaller()
+
+    # 生成空目录骨架 staging，build.spec 的 datas 只打包骨架不含用户笔记
+    prepare_staging()
 
     logger.info("开始打包个人企业世界模型...")
     cmd = _pyinstaller_cmd() + ["build.spec", "--clean", "--noconfirm"]

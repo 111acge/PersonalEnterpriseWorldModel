@@ -131,10 +131,20 @@ def _write_report(report: Dict[str, Any]) -> None:
     )
 
 
-def get_torch_status() -> Dict[str, Any]:
-    """获取当前 torch 环境状态（用于设置页展示）。"""
+# 模块级缓存：启动期验证一次，后续 get_torch_status 直接复用
+_status_cache: Dict[str, Any] = {}
+
+
+def get_torch_status(refresh: bool = False) -> Dict[str, Any]:
+    """获取当前 torch 环境状态（用于设置页展示）。
+
+    结果在模块级缓存，重复调用不重新执行验证；传 refresh=True 强制重新验证。
+    """
+    if _status_cache and not refresh:
+        return dict(_status_cache)
     report = validate_torch_environment()
-    return {
+    _status_cache.clear()
+    _status_cache.update({
         "torch_version": report.get("torch_version"),
         "backend": "CUDA" if report.get("cuda_available") else "CPU",
         "cpu_available": report.get("cpu_available"),
@@ -149,7 +159,8 @@ def get_torch_status() -> Dict[str, Any]:
             and report.get("bge_model_files_ok", False)
         ),
         "errors": report.get("errors", []),
-    }
+    })
+    return dict(_status_cache)
 
 
 if __name__ == "__main__":

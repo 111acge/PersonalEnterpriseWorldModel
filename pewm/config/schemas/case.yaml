@@ -9,6 +9,9 @@ required_frontmatter:
   - source
   - updated_at
 content_template: |
+  ---
+  {{ frontmatter }}
+  ---
   # {{ title }}
 
   > 编号：{{ case_id }} | 严重级别：{{ severity }}

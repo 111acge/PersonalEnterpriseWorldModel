@@ -6,6 +6,7 @@
 
 所有图片处理都支持 progress_callback(current, total, message) 回调，用于 GUI 显示进度。
 """
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -16,8 +17,9 @@ from pewm.processors.ocr_api import ocr_by_api, load_ocr_config
 logger = get_logger(__name__)
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
 
-# 全局缓存：PaddleOCR 实例
+# 全局缓存：PaddleOCR 实例（初始化需线程安全）
 _OCR = None
+_OCR_LOCK = threading.Lock()
 
 
 def _load_paddle():
@@ -25,24 +27,34 @@ def _load_paddle():
     global _OCR
     if _OCR is not None:
         return _OCR
-    try:
-        from paddleocr import PaddleOCR
-    except ImportError:
-        raise RuntimeError(
-            "未安装 PaddleOCR。请在「OCR 配置」Tab 中切换到 API 模式，"
-            "或执行：pip install paddlepaddle paddleocr"
-        )
-    det_dir = ROOT / "data" / "ocr_models"
-    det_dir.mkdir(parents=True, exist_ok=True)
-    _OCR = PaddleOCR(
-        use_angle_cls=True,
-        lang="ch",
-        det_model_dir=str(det_dir / "det"),
-        rec_model_dir=str(det_dir / "rec"),
-        cls_model_dir=str(det_dir / "cls"),
-        show_log=False,
-    )
-    return _OCR
+    with _OCR_LOCK:
+        if _OCR is not None:
+            return _OCR
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError:
+            raise RuntimeError(
+                "未安装 PaddleOCR。请在「OCR 配置」Tab 中切换到 API 模式，"
+                "或执行：pip install paddlepaddle paddleocr"
+            )
+        det_dir = ROOT / "data" / "ocr_models"
+        det_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _OCR = PaddleOCR(
+                use_angle_cls=True,
+                lang="ch",
+                det_model_dir=str(det_dir / "det"),
+                rec_model_dir=str(det_dir / "rec"),
+                cls_model_dir=str(det_dir / "cls"),
+                show_log=False,
+            )
+        except TypeError as e:
+            raise RuntimeError(
+                f"PaddleOCR 初始化参数不兼容：{e}。"
+                "当前安装的可能是 PaddleOCR 3.x，本程序仅兼容 2.x。"
+                '请执行：pip install "paddleocr<3"'
+            ) from e
+        return _OCR
 
 
 def list_media_files() -> List[Path]:
@@ -105,11 +117,10 @@ def ocr_for_inbox_file(inbox_file: Path,
     if not MEDIA_DIR.exists():
         return ""
     stem = inbox_file.stem
-    date_prefix = stem[:10] if len(stem) >= 10 else stem
     related = []
     for p in list_media_files():
         p_stem = p.stem
-        if p_stem == stem or p_stem.startswith(stem + "-") or p_stem.startswith(date_prefix):
+        if p_stem == stem or p_stem.startswith(stem + "-"):
             related.append(p)
     if not related:
         return ""
@@ -128,7 +139,7 @@ def ocr_for_inbox_file(inbox_file: Path,
                 texts.append(f"[图片: {img.name}]\n{t}")
         except Exception as e:
             logger.warning("图片 %s 识别失败: %s", img.name, e)
-            texts.append(f"[图片 {img.name} 识别失败: {e}]")
+            texts.append(f"[图片 {img.name} 识别失败]")
 
     if progress_callback:
         progress_callback(total, total, "OCR 完成")
@@ -149,7 +160,7 @@ def process_all_media(progress_callback: Optional[Callable] = None) -> Dict[Path
             out[img] = ocr_image(img)
         except Exception as e:
             logger.warning("图片 %s 识别失败: %s", img.name, e)
-            out[img] = f"[识别失败: {e}]"
+            out[img] = "[识别失败]"
     if progress_callback:
         progress_callback(total, total, "OCR 完成")
     return out

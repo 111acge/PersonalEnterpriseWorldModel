@@ -8,12 +8,13 @@ from pewm.processors.database import is_inbox_processed
 
 
 def list_inbox_files() -> List[Path]:
-    """列出 00-Inbox 中所有 Markdown 文件（不含 _media）。"""
+    """列出 00-Inbox 中所有 Markdown/TXT 文件（不含 _media）。"""
     files = []
-    for p in paths.INBOX_DIR.rglob("*.md"):
-        if "_media" in p.parts:
-            continue
-        files.append(p)
+    for pattern in ("*.md", "*.txt"):
+        for p in paths.INBOX_DIR.rglob(pattern):
+            if "_media" in p.parts:
+                continue
+            files.append(p)
     return sorted(files)
 
 
@@ -29,10 +30,24 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+_WINDOWS_RESERVED_NAMES = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+_MAX_FILENAME_LEN = 60
+
+
 def sanitize_filename(name: str) -> str:
-    """生成安全的文件名。"""
-    name = re.sub(r"[^\w\u4e00-\u9fff-]", "", name)
-    return name.strip("-") or "untitled"
+    """生成安全的文件名：过滤非法字符、规避 Windows 保留名、限制长度并保证非空。"""
+    name = re.sub(r"[^\w\u4e00-\u9fff-]", "", str(name))
+    name = name.strip("-")
+    if len(name) > _MAX_FILENAME_LEN:
+        name = name[:_MAX_FILENAME_LEN].rstrip("-")
+    if name.upper() in _WINDOWS_RESERVED_NAMES:
+        name += "_"
+    return name or "untitled"
 
 
 def read_text(path: Path) -> str:

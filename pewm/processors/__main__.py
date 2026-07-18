@@ -11,7 +11,7 @@ from pewm.processors.utils import (
     read_text,
     write_text,
 )
-from pewm.processors.extractor import extract_entities, extract_entities_batch, load_schemas
+from pewm.processors.extractor import extract_entities_batch, load_schemas
 from pewm.processors.log_config import get_logger
 from pewm.processors.metrics import timed
 from pewm.processors.vectorizer import index_documents
@@ -54,20 +54,25 @@ def reconcile() -> Dict[str, int]:
         # 绝对路径：提取尾部片段，尝试在当前 ROOT 下寻找
         # 例：C:/old/project/20-Ontology/foo.md → 20-Ontology/foo.md → C:/new/project/20-Ontology/foo.md
         parts = p.parts
-        # 找到第一个"知识层目录"作为锚点（10-Theory / 20-Ontology / 30-Instances / 40-Skills / 00-Inbox）
+        # 依次尝试所有"知识层目录"锚点位置（10-Theory / 20-Ontology / 30-Instances / 40-Skills / 00-Inbox）
         anchor_names = {"10-Theory", "20-Ontology", "30-Instances", "40-Skills", "00-Inbox"}
+        found_anchor = False
         for i, part in enumerate(parts):
             if part in anchor_names:
+                found_anchor = True
                 rel = Path(*parts[i:])
                 new_path = ROOT / rel
                 if new_path.exists():
                     return True
-                break
-        # 退路：尝试取最后 3 段作为相对路径
-        if len(parts) >= 3:
+        # 退路：尝试取最后 3 段作为相对路径（仅当路径含知识层锚点、可信属于本项目时才采用）
+        if found_anchor and len(parts) >= 3:
             rel = Path(*parts[-3:])
             if (ROOT / rel).exists():
                 return True
+        if not found_anchor:
+            # 不含任何知识层锚点的绝对路径无法确认归属，保守不软删
+            logger.warning("无法确认路径归属，保守保留不软删：%s", stored_path)
+            return True
         return False
 
     # 收集所有未删除文档的 path
@@ -138,6 +143,45 @@ def _try_ocr(inbox_path: Path, text: str) -> str:
     return text
 
 
+def backfill_missing_indexes(schemas: Dict, build_vector: bool = True) -> int:
+    """补索引扫描：找出磁盘上存在但 documents 表无记录的实体文件并补建索引。
+
+    仅使用 database 现有接口（get_document / index_documents）实现。
+    返回补索引的文档数量。
+    """
+    from pewm.processors.database import get_document
+
+    missing = []
+    seen = set()
+    for schema in schemas.values():
+        storage = schema.get("storage_path")
+        if not storage:
+            continue
+        storage_dir = ROOT / storage
+        if not storage_dir.exists():
+            continue
+        for p in sorted(storage_dir.rglob("*.md")):
+            key = str(p.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            if get_document(str(p)) is not None:
+                continue
+            try:
+                missing.append({
+                    "source": str(p.relative_to(ROOT)),
+                    "entity_type": schema.get("entity_type", "note"),
+                    "path": p,
+                    "content": read_text(p),
+                })
+            except Exception as e:
+                logger.warning("补索引读取失败（已跳过）: %s - %s", p, e)
+    if missing:
+        logger.info("发现 %d 个磁盘存在但未索引的文档，开始补索引...", len(missing))
+        index_documents(missing, build_vector=build_vector)
+    return len(missing)
+
+
 @timed("pipeline.run")
 def run_pipeline(
     reset: bool = False,
@@ -145,16 +189,21 @@ def run_pipeline(
     no_git: bool = False,
     no_vector: bool = False,
     no_ocr: bool = False,
+    offline: bool = False,
 ):
     logger.info("启动本体生成：%s", ROOT)
 
-    # 前置检查：本体提炼必须经过 LLM，LLM 不可用则拒绝执行
-    from pewm.processors.llm_client import check_llm_ready
-    llm_ok, llm_msg = check_llm_ready()
-    if not llm_ok:
-        logger.error(llm_msg)
-        print(llm_msg)
-        return
+    if offline:
+        # 离线模式：不依赖 LLM，走规则提取 + note 兜底
+        logger.info("离线模式：跳过 LLM 检查，使用规则提取 + note 兜底。")
+    else:
+        # 前置检查：本体提炼必须经过 LLM，LLM 不可用则拒绝执行
+        from pewm.processors.llm_client import check_llm_ready
+        llm_ok, llm_msg = check_llm_ready()
+        if not llm_ok:
+            logger.error(llm_msg)
+            print(llm_msg)
+            return
 
     # 立即初始化数据库，确保 data/ 目录和表始终被创建
     init_db()
@@ -162,12 +211,11 @@ def run_pipeline(
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     schemas = load_schemas()
-    documents = []
     processed_count = 0
 
     files = list_inbox_files()
     if not files:
-        logger.info("00-Inbox 中没有 Markdown 文件。")
+        logger.info("00-Inbox 中没有可处理的 Markdown/TXT 文件。")
         return
 
     # 收集待处理的文件
@@ -202,32 +250,42 @@ def run_pipeline(
     if batch_items:
         sources = [item[0] for item in batch_items]
         logger.info("批量处理：%s", ", ".join(sources))
-        batch_results = extract_entities_batch([(s, t) for s, t, m, p in batch_items])
+        # extract_entities_batch 内部已含逐文件兜底，此处不再重复第三层兜底
+        batch_results = extract_entities_batch(
+            [(s, t) for s, t, m, p in batch_items], offline=offline)
 
         for idx, (rel, text, mtime, path) in enumerate(batch_items):
-            entities = batch_results[idx] if idx < len(batch_results) else []
-            if not entities:
-                # 批量未返回时单文件兜底
-                entities = extract_entities(text, source=rel)
+            try:
+                entities = batch_results[idx] if idx < len(batch_results) else []
 
-            logger.info("[process] %s", rel)
-            for entity in entities:
-                write_text(entity["path"], entity["content"])
-                logger.info("  -> %s", entity["path"].relative_to(ROOT))
-                documents.append({
-                    "source": rel,
-                    "entity_type": entity["entity_type"],
-                    "path": entity["path"],
-                    "content": entity["content"],
-                })
+                logger.info("[process] %s", rel)
+                file_docs = []
+                for entity in entities:
+                    write_text(entity["path"], entity["content"])
+                    logger.info("  -> %s", entity["path"].relative_to(ROOT))
+                    file_docs.append({
+                        "source": rel,
+                        "entity_type": entity["entity_type"],
+                        "path": entity["path"],
+                        "content": entity["content"],
+                    })
 
-            mark_inbox_processed(rel, mtime)
-            processed_count += 1
+                # 顺序保证：先索引成功，再标记已处理，避免中途崩溃丢索引
+                if file_docs:
+                    index_documents(file_docs, build_vector=not no_vector)
+                mark_inbox_processed(rel, mtime)
+                processed_count += 1
+            except Exception as e:
+                logger.error("处理失败: %s - %s", rel, e)
+                if not skip_errors:
+                    raise
 
     logger.info("处理完成：%d 个 Inbox 文件。", processed_count)
 
-    # SQLite FTS5 + 向量索引
-    index_documents(documents, build_vector=not no_vector)
+    # 补索引：磁盘存在但 documents 表无记录的文档（如上次索引前崩溃）
+    backfilled = backfill_missing_indexes(schemas, build_vector=not no_vector)
+    if backfilled:
+        logger.info("补索引完成：%d 个磁盘存在但未记录的文档。", backfilled)
 
     # 自动清理：把磁盘上已不存在的文档软删除
     orphan = reconcile()
@@ -243,11 +301,17 @@ def git_commit():
     """自动提交变更到 Git。"""
     try:
         subprocess.run(["git", "add", "-A"], cwd=ROOT, check=True)
-        subprocess.run(
+        result = subprocess.run(
             ["git", "commit", "-m", "auto: pipeline run"],
             cwd=ROOT,
             check=False,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+            if "nothing to commit" not in output:
+                logger.warning("Git 提交失败（returncode=%d）：%s", result.returncode, output)
     except FileNotFoundError:
         logger.warning("未找到 git，跳过自动提交。")
     except subprocess.CalledProcessError as e:
@@ -268,8 +332,11 @@ def show_status():
 
     # 向量库状态
     vec_status = "未构建"
-    from pewm.processors.vector_db import VectorDB
-    if VectorDB is not None:
+    try:
+        from pewm.processors.vector_db import VectorDB
+    except ImportError:
+        logger.info("向量库依赖不可用，跳过向量库状态读取。")
+    else:
         try:
             vs = VectorDB().stats()
             vec_status = f"{vs['doc_count']} 条 / {vs['kind']} / {vs['dim']}维"
@@ -291,6 +358,7 @@ def main():
     parser.add_argument("--no-git", action="store_true", help="禁用 Git 自动提交")
     parser.add_argument("--no-vector", action="store_true", help="跳过向量索引（只用 FTS5）")
     parser.add_argument("--no-ocr", action="store_true", help="跳过图片 OCR 处理")
+    parser.add_argument("--offline", action="store_true", help="离线模式：不调用 LLM，仅用规则提取 + note 兜底")
     parser.add_argument("--status", action="store_true", help="查看 Inbox 处理状态")
     parser.add_argument("--rebuild-vector", action="store_true", help="重建全部向量索引")
     parser.add_argument("--reconcile", action="store_true", help="扫描并软删除磁盘上已不存在的文档")
@@ -315,6 +383,7 @@ def main():
             no_git=args.no_git,
             no_vector=args.no_vector,
             no_ocr=args.no_ocr,
+            offline=args.offline,
         )
 
 

@@ -8,9 +8,24 @@ Windows 用户安装 PyInstaller 后运行：
 """
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+import os
+import shutil
 import sys
+from pathlib import Path
 
 block_cipher = None
+
+# 打包内容目录时只使用空目录骨架（仅含 .gitkeep），避免把用户私人笔记打进 exe。
+# 与 build.py 的 prepare_staging 一致；直接运行 pyinstaller build.spec 时也会自动生成。
+_spec_root = Path(os.getcwd())
+_staging = _spec_root / 'build' / 'staging'
+_content_dirs = ['00-Inbox', '10-Theory', '20-Ontology', '30-Instances', '40-Skills', '90-Meta']
+if not all((_staging / d / '.gitkeep').exists() for d in _content_dirs):
+    if _staging.exists():
+        shutil.rmtree(_staging)
+    for _d in _content_dirs:
+        (_staging / _d).mkdir(parents=True, exist_ok=True)
+        (_staging / _d / '.gitkeep').write_text('', encoding='utf-8')
 
 # 收集 Flask / pywebview / jinja2 / werkzeug 运行时所需的静态文件和子模块
 flask_datas = collect_data_files('flask')
@@ -23,17 +38,18 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('00-Inbox', '00-Inbox'),
-        ('10-Theory', '10-Theory'),
-        ('20-Ontology', '20-Ontology'),
-        ('30-Instances', '30-Instances'),
-        ('40-Skills', '40-Skills'),
-        ('90-Meta', '90-Meta'),
+        ('build/staging/00-Inbox', '00-Inbox'),
+        ('build/staging/10-Theory', '10-Theory'),
+        ('build/staging/20-Ontology', '20-Ontology'),
+        ('build/staging/30-Instances', '30-Instances'),
+        ('build/staging/40-Skills', '40-Skills'),
+        ('build/staging/90-Meta', '90-Meta'),
         ('pewm', 'pewm'),
         ('pewm/web/templates', 'pewm/web/templates'),
         ('pewm/web/static', 'pewm/web/static'),
         ('.env.example', '.'),
         ('requirements.txt', '.'),
+        ('VERSION', '.'),
         ('bge-model', 'bge-model'),
     ] + flask_datas + webview_datas + jinja2_datas,
     hiddenimports=[

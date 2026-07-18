@@ -54,7 +54,8 @@ class TestGetClient:
              patch.object(llm_client, "CONFIG_FILE", tmp_path / "nope.json"):
             llm_client.get_client(provider="deepseek", api_key="sk-x")
         fake_openai.assert_called_once_with(
-            api_key="sk-x", base_url="https://api.deepseek.com"
+            api_key="sk-x", base_url="https://api.deepseek.com",
+            timeout=60, max_retries=2,
         )
 
 
@@ -90,19 +91,38 @@ class TestChatCompletion:
             out = llm_client.chat_completion(messages=[{"role": "user", "content": "hi"}])
         assert out == "回答内容"
 
-    def test_chat_completion_stream_yields_deltas(self, tmp_path):
-        client = MagicMock()
+    def _fake_stream(self, texts):
+        """构造支持 with 关闭与迭代的流式响应 mock。"""
         chunks = []
-        for text in ["你", "好", ""]:
+        for text in texts:
             c = MagicMock()
             c.choices = [MagicMock()]
             c.choices[0].delta.content = text
             chunks.append(c)
-        client.chat.completions.create.return_value = iter(chunks)
+        stream = MagicMock()
+        stream.__iter__.return_value = iter(chunks)
+        stream.__enter__.return_value = stream
+        return stream
+
+    def test_chat_completion_stream_yields_deltas(self, tmp_path):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_stream(["你", "好", ""])
         with patch.object(llm_client, "get_client", return_value=client), \
              patch.object(llm_client, "get_model", return_value="m"):
             deltas = list(llm_client.chat_completion_stream(messages=[]))
         assert deltas == ["你", "好"]
+
+    def test_chat_completion_stream_closes_response(self, tmp_path):
+        """流式响应必须被 with 显式关闭（#43）。"""
+        client = MagicMock()
+        stream = self._fake_stream(["你"])
+        client.chat.completions.create.return_value = stream
+        with patch.object(llm_client, "get_client", return_value=client), \
+             patch.object(llm_client, "get_model", return_value="m"):
+            deltas = list(llm_client.chat_completion_stream(messages=[]))
+        assert deltas == ["你"]
+        stream.__enter__.assert_called_once()
+        stream.__exit__.assert_called_once()
 
 
 class TestTestApi:

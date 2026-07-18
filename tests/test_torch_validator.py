@@ -66,3 +66,16 @@ def test_get_torch_status_returns_healthy_flag(temp_project):
     status = get_torch_status()
     assert "healthy" in status
     assert isinstance(status["healthy"], bool)
+
+
+def test_get_torch_status_caches_result(temp_project):
+    """get_torch_status 应缓存验证结果，refresh=True 时强制重新验证。"""
+    import pewm.processors.torch_validator as tv
+
+    tv._status_cache.clear()
+    with patch.object(tv, "validate_torch_environment", wraps=tv.validate_torch_environment) as spy:
+        tv.get_torch_status()
+        tv.get_torch_status()
+        assert spy.call_count == 1
+        tv.get_torch_status(refresh=True)
+        assert spy.call_count == 2

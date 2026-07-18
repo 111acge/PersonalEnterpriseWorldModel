@@ -6,6 +6,8 @@ const app = {
     selectedDocs: new Set(),
     providers: {},
     ocrProviders: {},
+    // 后端访问令牌（启动时从 /api/auth/token 获取）
+    token: '',
     // 笔记工作台状态
     notes: [],
     currentNotePath: null,
@@ -25,7 +27,8 @@ const app = {
         { name: '玫红', value: '#db2777' },
     ],
 
-    init() {
+    async init() {
+        await this.loadToken();
         this.bindNav();
         this.bindTheme();
         this.bindWindowControls();
@@ -277,8 +280,27 @@ const app = {
         });
     },
 
+    async loadToken() {
+        try {
+            const res = await fetch('/api/auth/token');
+            const data = await res.json();
+            if (data.success && data.data && data.data.token) {
+                this.token = data.data.token;
+            }
+        } catch (e) {
+            console.warn('获取访问令牌失败', e);
+        }
+    },
+
     async api(url, options = {}) {
         try {
+            options.headers = Object.assign({}, options.headers);
+            if (this.token) options.headers['X-Token'] = this.token;
+            const method = (options.method || 'GET').toUpperCase();
+            if (method !== 'GET' && !options.headers['Content-Type']) {
+                options.headers['Content-Type'] = 'application/json';
+                if (!options.body) options.body = '{}';
+            }
             const res = await fetch(url, options);
             const data = await res.json();
             if (!data.success && data.error) {
@@ -397,7 +419,7 @@ const app = {
         try {
             const resp = await fetch('/api/chat/stream', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-Token': this.token || '' },
                 body: JSON.stringify({ q, type, use_rag: useRag, session_id: sessionId })
             });
             if (!resp.ok || !resp.body) return false;
@@ -514,7 +536,7 @@ const app = {
                     <span>${this.escapeHtml(r.path || '')}</span>
                     <span>${r.rrf_score ? r.rrf_score.toFixed(4) : ''}</span>
                 </div>
-                <div class="result-meta">类型：${r.entity_type || '-'} | 来源：${r.source || 'fts5'}</div>
+                <div class="result-meta">类型：${this.escapeHtml(r.entity_type || '-')} | 来源：${this.escapeHtml(r.source || 'fts5')}</div>
                 <div class="result-preview">${this.escapeHtml((r.content || '').slice(0, 200))}...</div>
             `;
             div.addEventListener('click', () => this.showDocDetail(r.path));
@@ -822,7 +844,13 @@ const app = {
             s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
             s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
             s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-            s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+            // 链接 URL 协议白名单：仅 http/https/mailto，非法协议降级为纯文本
+            s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => {
+                if (/^(https?:|mailto:)/i.test(url)) {
+                    return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+                }
+                return text;
+            });
             return s;
         };
 
@@ -932,8 +960,8 @@ const app = {
             tr.innerHTML = `
                 <td><input type="checkbox" class="doc-checkbox" data-path="${this.escapeHtml(d.path)}"></td>
                 <td>${this.escapeHtml(d.path)}</td>
-                <td>${d.entity_type || ''}</td>
-                <td>${d.updated_at || ''}</td>
+                <td>${this.escapeHtml(d.entity_type || '')}</td>
+                <td>${this.escapeHtml(d.updated_at || '')}</td>
                 <td><span class="badge ${d.deleted_at ? 'danger' : 'success'}">${d.deleted_at ? '回收站' : '正常'}</span></td>
                 <td>${this.escapeHtml(d.source || '')}</td>
             `;
@@ -1221,12 +1249,25 @@ const app = {
             ['company_name', '公司名称'], ['company_industry', '行业'], ['company_scale', '规模'],
             ['company_products', '产品/服务'], ['company_address', '地址'], ['company_website', '网址']
         ];
-        document.getElementById('profile-personal').innerHTML = personal.map(([k, l]) => `
-            <div class="form-group"><label>${l}</label><input class="input profile-field" data-key="${k}" value="${this.escapeHtml(p[k] || '')}"></div>
-        `).join('');
-        document.getElementById('profile-company').innerHTML = company.map(([k, l]) => `
-            <div class="form-group"><label>${l}</label><input class="input profile-field" data-key="${k}" value="${this.escapeHtml(p[k] || '')}"></div>
-        `).join('');
+        const buildField = (container, key, label, value) => {
+            const group = document.createElement('div');
+            group.className = 'form-group';
+            const labelEl = document.createElement('label');
+            labelEl.textContent = label;
+            const input = document.createElement('input');
+            input.className = 'input profile-field';
+            input.dataset.key = key;
+            input.value = value || '';
+            group.appendChild(labelEl);
+            group.appendChild(input);
+            container.appendChild(group);
+        };
+        const personalBox = document.getElementById('profile-personal');
+        personalBox.innerHTML = '';
+        personal.forEach(([k, l]) => buildField(personalBox, k, l, p[k]));
+        const companyBox = document.getElementById('profile-company');
+        companyBox.innerHTML = '';
+        company.forEach(([k, l]) => buildField(companyBox, k, l, p[k]));
         document.getElementById('profile-extra').value = p.extra_context || '';
     },
 
@@ -1257,13 +1298,25 @@ const app = {
         const values = await this.api('/api/config/prompt');
         if (!fields.success || !values.success) return;
         const container = document.getElementById('prompt-fields');
-        container.innerHTML = fields.data.map(f => `
-            <div class="form-group">
-                <label>${f.label}</label>
-                <p style="color:var(--text-secondary);font-size:13px;margin:4px 0">${f.description}</p>
-                <textarea class="input prompt-field" data-key="${f.key}" rows="${f.rows}">${this.escapeHtml(values.data[f.key] || '')}</textarea>
-            </div>
-        `).join('');
+        container.innerHTML = '';
+        fields.data.forEach(f => {
+            const group = document.createElement('div');
+            group.className = 'form-group';
+            const label = document.createElement('label');
+            label.textContent = f.label;
+            const desc = document.createElement('p');
+            desc.style.cssText = 'color:var(--text-secondary);font-size:13px;margin:4px 0';
+            desc.textContent = f.description;
+            const textarea = document.createElement('textarea');
+            textarea.className = 'input prompt-field';
+            textarea.dataset.key = f.key;
+            textarea.rows = f.rows;
+            textarea.value = values.data[f.key] || '';
+            group.appendChild(label);
+            group.appendChild(desc);
+            group.appendChild(textarea);
+            container.appendChild(group);
+        });
     },
 
     async savePrompt() {
@@ -1389,9 +1442,12 @@ const app = {
     },
 
     escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 };
 

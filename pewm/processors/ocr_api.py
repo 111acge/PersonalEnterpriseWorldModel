@@ -81,8 +81,20 @@ def _http_post(url: str, data: Dict, headers: Optional[Dict] = None,
 
 # ========== 百度智能云 OCR ==========
 
+# access_token 缓存：{(api_key, secret_key): (token, 过期时间戳)}
+_BAIDU_TOKEN_CACHE: Dict = {}
+
+# 提前判过期的安全余量（秒），避免用到边界时刻刚好失效的 token
+_TOKEN_EXPIRE_MARGIN = 3600
+
+
 def _baidu_get_token(api_key: str, secret_key: str) -> str:
-    """百度：用 api_key + secret_key 换取 access_token。"""
+    """百度：用 api_key + secret_key 换取 access_token（带缓存，过期前复用）。"""
+    cache_key = (api_key, secret_key)
+    cached = _BAIDU_TOKEN_CACHE.get(cache_key)
+    now = time.time()
+    if cached and cached[1] > now:
+        return cached[0]
     url = (
         "https://aip.baidubce.com/oauth/2.0/token?"
         "grant_type=client_credentials"
@@ -94,6 +106,12 @@ def _baidu_get_token(api_key: str, secret_key: str) -> str:
         data = json.loads(resp.read().decode("utf-8"))
     if "access_token" not in data:
         raise RuntimeError(f"百度 token 获取失败: {data}")
+    try:
+        expires_in = int(data.get("expires_in", 2592000))
+    except (TypeError, ValueError):
+        expires_in = 2592000
+    expires_at = now + max(expires_in - _TOKEN_EXPIRE_MARGIN, 60)
+    _BAIDU_TOKEN_CACHE[cache_key] = (data["access_token"], expires_at)
     return data["access_token"]
 
 
@@ -264,6 +282,7 @@ def save_ocr_config(ocr_cfg: Dict) -> None:
 def test_ocr_api(provider: str, credentials: Dict, sample_image: Optional[Path] = None) -> str:
     """测试 OCR API 连通性，返回 'OK: ...' 或 'ERROR: ...'。"""
     # 使用一个 1x1 的纯白 PNG 作为测试样本
+    created_sample: Optional[Path] = None
     if sample_image is None or not sample_image.exists():
         # 最小的合法 PNG（1x1 白色像素）
         sample_png = (CONFIG_DIR / "_ocr_test.png")
@@ -276,9 +295,14 @@ def test_ocr_api(provider: str, credentials: Dict, sample_image: Optional[Path] 
             )
             sample_png.write_bytes(base64.b64decode(png_b64))
         sample_image = sample_png
+        created_sample = sample_png
     try:
         results = ocr_by_api(sample_image, provider, credentials)
         return f"OK: 连通成功，返回 {len(results)} 个文字区域"
     except Exception as e:
         logger.warning("OCR API 测试失败：%s", e)
         return f"ERROR: {e}"
+    finally:
+        # 测试样本用完即删，不在配置目录遗留临时文件
+        if created_sample is not None:
+            created_sample.unlink(missing_ok=True)

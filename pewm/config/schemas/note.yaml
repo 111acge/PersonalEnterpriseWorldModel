@@ -6,6 +6,9 @@ required_frontmatter:
   - confidence
   - updated_at
 content_template: |
+  ---
+  {{ frontmatter }}
+  ---
   # {{ title }}
 
   > 来源：{{ source }} | 置信度：{{ confidence }} | 更新于：{{ updated_at }}

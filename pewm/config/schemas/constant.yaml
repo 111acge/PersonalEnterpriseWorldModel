@@ -9,6 +9,9 @@ required_frontmatter:
   - source
   - updated_at
 content_template: |
+  ---
+  {{ frontmatter }}
+  ---
   # {{ key }}
 
   > 值：`{{ value }} {{ unit }}`

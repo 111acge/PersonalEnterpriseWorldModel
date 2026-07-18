@@ -160,6 +160,8 @@ def _llm_extract(text: str, source: str, schemas: Dict[str, Dict[str, Any]]) -> 
 
     truncated = text[:6000]
     if len(text) > 6000:
+        logger.info("文本超长（%d 字符），截断至 6000 字符用于 LLM 提取，丢弃 %d 字符",
+                    len(text), len(text) - 6000)
         truncated += "\n...(内容过长，已截断)"
 
     try:
@@ -195,14 +197,24 @@ def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -
     total_len = 0
     included = []
     for idx, (source, text) in enumerate(items):
+        if not text.strip():
+            # 空文本直接跳过，不占批量额度（source_index 仍按原始 idx 对齐）
+            logger.info("批量提取跳过空文本：%s", source)
+            continue
         remain = max(0, 12000 - total_len)
         chunk = text[:min(2500, remain)]
         if not chunk:
+            # 额度耗尽：后续文件交给逐文件兜底
+            logger.info("批量提取额度耗尽，剩余 %d 篇跳过批量、转逐文件处理",
+                        len(items) - len(included))
             break
         parts.append(f"[SOURCE:{idx}]\n来源文件：{source}\n内容：\n{chunk}\n")
         total_len += len(chunk)
         included.append(idx)
         if total_len >= 12000:
+            skipped = len(items) - len(included)
+            if skipped > 0:
+                logger.info("批量提取达到长度上限，剩余 %d 篇转逐文件处理", skipped)
             break
 
     try:
@@ -222,10 +234,28 @@ def _llm_extract_batch(items: List[tuple], schemas: Dict[str, Dict[str, Any]]) -
     # 按 source_index 分组
     grouped: List[List[Dict]] = [[] for _ in items]
     for item in raw_items:
-        idx = item.get("source_index", 0)
-        if isinstance(idx, int) and 0 <= idx < len(items):
-            grouped[idx].append(item)
+        idx = _parse_source_index(item.get("source_index"))
+        if idx is None or not (0 <= idx < len(items)):
+            # 缺失/非法/越界：不默认归 0，记 warning 后丢弃，由逐文件兜底重提取
+            logger.warning("批量结果 source_index 无效（%r），该实体交由逐文件兜底",
+                           item.get("source_index"))
+            continue
+        grouped[idx].append(item)
     return grouped
+
+
+def _parse_source_index(value: Any) -> Optional[int]:
+    """容错地把 LLM 返回的 source_index 转成 int；无法转换时返回 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
 
 
 def _salvage_objects(text: str) -> list:
@@ -342,17 +372,18 @@ def _rule_extract(text: str, source: str,
 
 # ========== 统一入口 ==========
 
-def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
+def extract_entities(text: str, source: str, offline: bool = False) -> List[Dict[str, Any]]:
     """提取实体：优先 LLM 智能分析；未配置 LLM 时回退规则；LLM 已配置但无结果时整篇存为 note。
 
     原则：本体建设必须经过 LLM。已配置 API Key 的情况下不再使用规则提取制造稀疏卡片。
+    offline=True 时强制跳过 LLM，直接走规则提取 + note 兜底。
     返回的每个元素包含 path/content/entity_type/frontmatter/merged。
     """
     schemas = load_schemas()
-    has_llm = bool(load_config().get("api_key"))
+    has_llm = bool(load_config().get("api_key")) and not offline
 
     # 1. 优先：LLM 提取
-    llm_items = _llm_extract(text, source, schemas)
+    llm_items = [] if offline else _llm_extract(text, source, schemas)
     if llm_items:
         converted = []
         for item in llm_items:
@@ -360,10 +391,16 @@ def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
             if c:
                 converted.append(c)
         if converted:
+            # 原文超 6000 字符时 LLM 只看到截断部分，强制追加整篇 note 保留全文
+            if len(text) > 6000 and "note" in schemas:
+                note = build_note_entity(text, source, schemas["note"])
+                if note:
+                    converted.append(note)
+                    logger.info("[llm] 原文超长（%d 字符），已追加整篇 note 保留全文", len(text))
             logger.info("[llm] 提取到 %d 个实体", len(converted))
             return converted
 
-    # 2. 兜底：仅当未配置 LLM 时才使用规则提取（离线/测试场景）
+    # 2. 兜底：仅当未配置 LLM（或离线模式）时才使用规则提取（离线/测试场景）
     if not has_llm:
         rules = load_rules()
         entities = _rule_extract(text, source, rules, schemas)
@@ -380,14 +417,17 @@ def extract_entities(text: str, source: str) -> List[Dict[str, Any]]:
     return []
 
 
-def extract_entities_batch(items: List[tuple]) -> List[List[Dict[str, Any]]]:
+def extract_entities_batch(items: List[tuple], offline: bool = False) -> List[List[Dict[str, Any]]]:
     """批量提取实体。
 
     items: [(source, text), ...]
+    offline=True 时跳过 LLM，逐文件走规则提取 + note 兜底。
     返回：与 items 一一对应的 entity 列表列表。
     """
     if not items:
         return []
+    if offline:
+        return [extract_entities(text, source, offline=True) for source, text in items]
     schemas = load_schemas()
 
     # 1. 优先：批量 LLM 提取
@@ -404,6 +444,12 @@ def extract_entities_batch(items: List[tuple]) -> List[List[Dict[str, Any]]]:
                     if c:
                         converted.append(c)
                 if converted:
+                    if len(text) > 6000 and "note" in schemas:
+                        note = build_note_entity(text, source, schemas["note"])
+                        if note:
+                            converted.append(note)
+                            logger.info("[llm-batch] %s 原文超长（%d 字符），已追加整篇 note 保留全文",
+                                        source, len(text))
                     logger.info("[llm-batch] %s 提取到 %d 个实体", source, len(converted))
                     results.append(converted)
                     continue
@@ -491,8 +537,19 @@ def build_entity(rule: Dict[str, Any], sentence: str, full_text: str,
     context = {"source": source, "updated_at": now, "confidence": "inferred"}
 
     if entity_type == "term":
-        m = re.search(r"([\u4e00-\u9fa5\w\s]+?)(?:叫|称为|定义为|指的是)\s*([\u4e00-\u9fa5\w\s]+)", sentence)
-        term = (m.group(2).strip() if m else sentence[:30]).strip()
+        # 按连词区分语序：
+        #   "我们叫/称为/简称/又称 X"   → 术语在连词之后（group 3）
+        #   "X 定义为/指的是 ..."       → 术语在连词之前（group 1）
+        m = re.search(
+            r"([\u4e00-\u9fa5\w\s]+?)(叫|称为|简称|又称|定义为|指的是)\s*([\u4e00-\u9fa5\w\s]+)",
+            sentence)
+        if m:
+            if m.group(2) in ("定义为", "指的是"):
+                term = m.group(1).strip()
+            else:
+                term = m.group(3).strip()
+        else:
+            term = sentence[:30].strip()
         context.update({"term": term, "aliases": [], "definition": sentence, "related": ""})
         filename = sanitize_filename(term) + ".md"
     elif entity_type == "constant":

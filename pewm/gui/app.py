@@ -15,8 +15,9 @@ from pewm.gui.tabs import (
     SearchTab,
     UserProfileTab,
 )
-from pewm.processors.log_config import get_logger
+from pewm.processors.log_config import get_logger, setup_logging
 
+setup_logging()
 logger = get_logger(__name__)
 
 

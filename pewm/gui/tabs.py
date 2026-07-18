@@ -1,7 +1,7 @@
 """PEWM GUI 的全部 9 个 Tab 类。"""
+import contextlib
 import io
 import re
-import sys
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -93,6 +93,8 @@ class ChatTab:
         api_key = cfg.get("api_key") if self.use_rag.get() else None
         provider = cfg.get("provider") if self.use_rag.get() else None
         model = cfg.get("model") if self.use_rag.get() else None
+        # tkinter 控件只允许在主线程访问，线程启动前先读出值
+        layer = self.layer.get() or None
 
         self.answer_area.config(state="normal")
         marker = self.answer_area.index("end-1c")
@@ -107,7 +109,7 @@ class ChatTab:
 
                 result = rag_answer(
                     query=q,
-                    entity_type=self.layer.get() or None,
+                    entity_type=layer,
                     top_k=5,
                     api_key=api_key,
                     provider=provider,
@@ -193,6 +195,8 @@ class SearchTab:
         self.result_area.config(state="disabled")
         self.append(f"搜索：{q}")
         self.search_btn.config(state="disabled")
+        # tkinter 控件只允许在主线程访问，线程启动前先读出值
+        layer = self.layer.get() or None
 
         def task():
             try:
@@ -201,7 +205,7 @@ class SearchTab:
 
                 results = hybrid_search(
                     query=q,
-                    entity_type=self.layer.get() or None,
+                    entity_type=layer,
                     top_k=10,
                 )
             except Exception as e:
@@ -360,20 +364,17 @@ class PipelineTab:
             dlg.update(current, message)
 
         def task():
-            import runpy
-
-            old_stdout = sys.stdout
             buffer = io.StringIO()
-            sys.stdout = buffer
             try:
                 progress_callback(0, 0, "正在扫描 Inbox...")
-                runpy.run_path(str(ROOT / "run.py"), run_name="__main__")
+                from pewm.processors.__main__ import run_pipeline as do_run
+
+                with contextlib.redirect_stdout(buffer):
+                    do_run(no_git=True, no_ocr=True)
                 output = buffer.getvalue()
             except Exception as e:
                 logger.exception("本体生成运行失败")
                 output = f"本体生成运行失败：{e}\n"
-            finally:
-                sys.stdout = old_stdout
             self.frame.after(0, lambda: self._pipeline_done(output, dlg))
 
         threading.Thread(target=task, daemon=True).start()
@@ -443,9 +444,7 @@ class PipelineTab:
         dlg = ProgressDialog(self.frame, title="重建向量索引", total=100, message="正在准备...")
 
         def task():
-            old_stdout = sys.stdout
             buffer = io.StringIO()
-            sys.stdout = buffer
             try:
                 from pewm.processors.vector_db import VectorDB
                 from pewm.processors.vectorizer import rebuild_vector as do_rebuild
@@ -469,13 +468,12 @@ class PipelineTab:
                         pct = 50
                     dlg.update(pct, msg)
 
-                do_rebuild()
+                with contextlib.redirect_stdout(buffer):
+                    do_rebuild()
                 output = buffer.getvalue()
             except Exception as e:
                 logger.exception("重建向量索引失败")
                 output = f"向量索引重建失败：{e}\n"
-            finally:
-                sys.stdout = old_stdout
             self.frame.after(0, lambda: self._rebuild_done(output, dlg))
 
         threading.Thread(target=task, daemon=True).start()

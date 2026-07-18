@@ -56,9 +56,14 @@ def _ocr_status() -> Dict[str, Any]:
         except Exception as e:
             status["error"] = f"本地 PaddleOCR 不可用：{e}"
     else:
-        # API 模式：依赖 requests，不占用本地资源
-        status["available"] = True
-        status["error"] = None
+        # API 模式：依赖 requests，不占用本地资源；但凭证为空时不可用
+        creds = cfg.get("credentials", {}) or {}
+        if any(str(v).strip() for v in creds.values()):
+            status["available"] = True
+            status["error"] = None
+        else:
+            status["available"] = False
+            status["error"] = "API 模式未配置凭证"
 
     return status
 
@@ -96,7 +101,7 @@ def get_environment_status() -> Dict[str, Any]:
         "torch": torch_status,
         "ocr": ocr_status,
         "watchdog": watchdog_status,
-        "healthy": torch_status.get("healthy", False) and ocr_status.get("available", False) is not False,
+        "healthy": bool(torch_status.get("healthy", False)) and bool(ocr_status.get("available", False)),
     }
 
     record(

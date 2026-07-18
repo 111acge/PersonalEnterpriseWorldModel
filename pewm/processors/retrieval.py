@@ -1,4 +1,5 @@
 """混合检索：FTS5 关键词 + 向量语义，使用 RRF 重排序 + embedding rerank。"""
+import threading
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
@@ -14,6 +15,31 @@ logger = get_logger(__name__)
 # 检索结果缓存：最近 128 条查询
 _search_cache = {}
 _MAX_CACHE_SIZE = 128
+
+# 进程级 VectorDB 单例：避免每次检索都全量加载向量库。
+# 向量库写操作会调用 on_vector_store_changed() 把单例标记为过期，
+# 下次检索时惰性 refresh。
+_vdb_holder: Dict = {"instance": None, "stale": True}
+_vdb_lock = threading.Lock()
+
+
+def _get_vector_db() -> VectorDB:
+    """获取进程级 VectorDB 单例；过期时先 refresh 再返回。"""
+    with _vdb_lock:
+        inst = _vdb_holder["instance"]
+        if inst is None:
+            inst = VectorDB()
+            _vdb_holder["instance"] = inst
+            _vdb_holder["stale"] = False
+        elif _vdb_holder["stale"]:
+            try:
+                inst.refresh()
+            except Exception as e:
+                logger.warning("VectorDB 单例刷新失败，重建实例：%s", e)
+                inst = VectorDB()
+                _vdb_holder["instance"] = inst
+            _vdb_holder["stale"] = False
+        return inst
 
 
 def _cache_key(query: str, entity_type: Optional[str], top_k: int, vec_k: int, rerank: bool) -> Tuple:
@@ -36,6 +62,18 @@ def _set_cached(key: Tuple, value: List[Dict]) -> None:
 def invalidate_search_cache() -> None:
     """文档增删改后调用，清空检索缓存。"""
     _search_cache.clear()
+
+
+def on_vector_store_changed() -> None:
+    """向量库写操作后的钩子：清检索缓存并把进程级单例标记为过期。
+
+    由 vector_db 的写路径（add/add_batch/soft_delete/restore/hard_delete/
+    reconcile/rebuild）调用；标记为惰性过期，下次检索时才真正 refresh，
+    避免批量写入期间反复全量加载。
+    """
+    _search_cache.clear()
+    with _vdb_lock:
+        _vdb_holder["stale"] = True
 
 
 def _normalize_scores(results: List[Dict], score_key: str = "score",
@@ -137,7 +175,7 @@ def hybrid_search(query: str, entity_type: Optional[str] = None,
         return cached
 
     fts_hits = search_documents(query, entity_type=entity_type, limit=top_k * 2)
-    vdb = VectorDB()
+    vdb = _get_vector_db()
     vec_hits = vdb.search(query, entity_type=entity_type, top_k=vec_k)
     fused = reciprocal_rank_fusion(fts_hits, vec_hits, top_k=max(top_k, 20))
     if rerank:

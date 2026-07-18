@@ -15,10 +15,11 @@ from pathlib import Path
 import webview
 
 from pewm.processors.crash_handler import install_crash_handler
-from pewm.processors.log_config import get_logger
+from pewm.processors.log_config import get_logger, setup_logging
 from pewm.processors.metrics import timed
 from pewm.web.splash_controller import SplashController
 
+setup_logging()
 logger = get_logger(__name__)
 
 install_crash_handler()

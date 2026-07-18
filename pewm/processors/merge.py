@@ -103,17 +103,28 @@ def _merge_value(old: Any, new: Any, strategy: str, field: str) -> Any:
 
 
 def _find_existing_path(output_path: Path) -> Optional[Path]:
-    """查找已存在的同实体文件（按 stem 模糊匹配）。"""
+    """查找已存在的同实体文件。
+
+    优先返回 stem 本体；本体不存在时，仅匹配 ``stem-<数字>`` 形式的序号文件
+    （避免 ``foo-bar.md`` 这类仅前缀相同的文件被误合并），命中多个时取序号最大者。
+    """
     if output_path.exists():
         return output_path
     parent = output_path.parent
     if not parent.exists():
         return None
     stem = output_path.stem
+    numbered = re.compile(r"^" + re.escape(stem) + r"-(\d+)$")
+    best: Optional[Path] = None
+    best_num = -1
     for p in parent.glob("*.md"):
-        if p.stem == stem or p.stem.startswith(stem + "-"):
+        if p.stem == stem:
             return p
-    return None
+        m = numbered.match(p.stem)
+        if m and int(m.group(1)) > best_num:
+            best = p
+            best_num = int(m.group(1))
+    return best
 
 
 def _next_available_path(output_path: Path) -> Path:
@@ -131,6 +142,48 @@ def _next_available_path(output_path: Path) -> Path:
         counter += 1
 
 
+def _dump_frontmatter(context: Dict[str, Any], entity_type: str,
+                      schema: Optional[Dict[str, Any]]) -> str:
+    """把实体元数据序列化为 YAML frontmatter 字符串。
+
+    优先按 schema 的 required_frontmatter 选字段（避免 note.content 这类长正文
+    重复进 frontmatter）；schema 未声明时退化为全量上下文字段。
+    额外补充 type / created_at 两个系统字段。
+    """
+    import yaml
+
+    fields = None
+    if schema:
+        required = schema.get("required_frontmatter")
+        if required:
+            fields = [f for f in required if f in context]
+    if fields is None:
+        fields = [k for k in context if k != "frontmatter"]
+
+    fm: Dict[str, Any] = {"type": entity_type}
+    for f in fields:
+        fm[f] = context[f]
+    fm["created_at"] = context.get("created_at") or context.get("updated_at") or now_iso()
+    return yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip()
+
+
+def _render_with_frontmatter(template: str, context: Dict[str, Any],
+                             entity_type: str, schema: Optional[Dict[str, Any]],
+                             render_template) -> str:
+    """渲染模板，同时把元数据序列化结果注入 {{ frontmatter }} 占位符。"""
+    render_context = dict(context)
+    render_context["frontmatter"] = _dump_frontmatter(context, entity_type, schema)
+    return render_template(template, render_context)
+
+
+def _normalize_for_compare(text: str) -> str:
+    """内容等值比较前抹掉时间戳、日期、自动生成 ID 等每次运行都会变化的成分。"""
+    text = re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", "<ts>", text)
+    text = re.sub(r"\b(?:CASE|PROC|SKILL)-\d{8}-\d{6}\b", "<id>", text)
+    text = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<date>", text)
+    return text.strip()
+
+
 def merge_entity(output_path: Path, new_context: Dict[str, Any],
                  entity_type: str, content_template: str,
                  render_template, schema: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -146,10 +199,24 @@ def merge_entity(output_path: Path, new_context: Dict[str, Any],
     existing_path = _find_existing_path(output_path)
 
     if not existing_path or not auto_merge:
+        new_content = _render_with_frontmatter(
+            content_template, new_context, entity_type, schema, render_template)
+        if existing_path and not auto_merge:
+            # auto_merge=false 的类型（note/case）：重复处理同一来源且内容未变时
+            # 跳过新建，避免 --reset 重跑无限生成 -1/-2 副本
+            old_content = read_text(existing_path)
+            if _normalize_for_compare(old_content) == _normalize_for_compare(new_content):
+                logger.info("内容未变化，跳过重复新建：%s", existing_path.name)
+                return {
+                    "path": existing_path,
+                    "content": old_content,
+                    "merged": False,
+                    "entity_type": entity_type,
+                }
         final_path = _next_available_path(output_path)
         return {
             "path": final_path,
-            "content": render_template(content_template, new_context),
+            "content": new_content,
             "merged": False,
             "entity_type": entity_type,
         }
@@ -159,13 +226,8 @@ def merge_entity(output_path: Path, new_context: Dict[str, Any],
     old_fm = _parse_frontmatter(old_content)
 
     merged_context = dict(old_fm)
+    merged_context.pop("frontmatter", None)
     for key, new_val in new_context.items():
-        if key in ("source", "updated_at"):
-            # 这些字段每次更新都追加历史
-            old_val = merged_context.get(key)
-            strategy = _policy_for_field(policy, key, entity_type) or "append"
-            merged_context[key] = _merge_value(old_val, new_val, strategy, key)
-            continue
         old_val = merged_context.get(key)
         strategy = _policy_for_field(policy, key, entity_type) or "append"
         merged_context[key] = _merge_value(old_val, new_val, strategy, key)
@@ -175,7 +237,8 @@ def merge_entity(output_path: Path, new_context: Dict[str, Any],
 
     return {
         "path": existing_path,
-        "content": render_template(content_template, merged_context),
+        "content": _render_with_frontmatter(
+            content_template, merged_context, entity_type, schema, render_template),
         "merged": True,
         "entity_type": entity_type,
     }

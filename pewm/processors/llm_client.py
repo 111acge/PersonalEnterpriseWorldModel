@@ -82,7 +82,8 @@ def get_client(provider: str = None, api_key: str = None, base_url: str = None):
     if not base_url:
         raise RuntimeError("无法确定 API base_url，请检查提供商或手动指定")
 
-    return OpenAI(api_key=api_key, base_url=base_url)
+    # 显式超时与重试，避免网络抖动时请求无限挂起
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=60, max_retries=2)
 
 
 def get_model(provider: str = None) -> str:
@@ -132,17 +133,18 @@ def chat_completion_stream(
     client = get_client(provider=provider, api_key=api_key)
     model_name = model or get_model(provider)
 
-    resp = client.chat.completions.create(
+    # with 包裹确保流式响应在生成器结束/中断时被显式关闭
+    with client.chat.completions.create(
         model=model_name,
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
         stream=True,
-    )
-    for chunk in resp:
-        delta = chunk.choices[0].delta.content or ""
-        if delta:
-            yield delta
+    ) as resp:
+        for chunk in resp:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                yield delta
 
 
 def test_api(provider: str, api_key: str, base_url: str = None) -> str:

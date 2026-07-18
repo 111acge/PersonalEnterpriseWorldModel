@@ -6,8 +6,10 @@ ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) el
 sys.path.insert(0, str(ROOT))
 
 from pewm.processors.crash_handler import install_crash_handler
+from pewm.processors.log_config import setup_logging
 from pewm.web.desktop import start_desktop_app
 
+setup_logging()
 install_crash_handler()
 
 

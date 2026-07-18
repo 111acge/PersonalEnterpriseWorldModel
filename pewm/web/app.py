@@ -1,13 +1,14 @@
 """Flask Web API，为 PEWM 提供 H5+CSS 前端所需的后端接口。"""
+import contextlib
 import io
 import json
 import os
 import re
-import sys
+import secrets
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
@@ -39,10 +40,36 @@ logger = get_logger(__name__)
 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder="static", template_folder="templates")
-    app.config["JSON_AS_ASCII"] = False
+    app.json.ensure_ascii = False
+
+    # 本次进程随机访问令牌：前端通过 /api/auth/token 获取后在 X-Token 头中携带
+    app.config["API_TOKEN"] = secrets.token_hex(16)
+
+    _ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+
+    @app.before_request
+    def _security_guard():
+        """仅允许本机访问；/api/* 校验令牌；非 GET 的 /api/* 强制 JSON 请求体。"""
+        host = (request.host or "").split(":")[0].lower()
+        if host not in _ALLOWED_HOSTS:
+            return jsonify(success=False, error="仅允许本机访问"), 403
+        if not request.path.startswith("/api/"):
+            return None
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not request.is_json:
+            return jsonify(success=False, error="请求体必须是 application/json"), 415
+        if request.path != "/api/auth/token":
+            token = request.headers.get("X-Token", "")
+            if not token or not secrets.compare_digest(token, app.config["API_TOKEN"]):
+                return jsonify(success=False, error="无效或缺失的访问令牌"), 401
+        return None
 
     # 初始化数据库
     init_db()
+
+    @app.route("/api/auth/token")
+    def api_auth_token():
+        """向前端发放本次进程的访问令牌（仅本机 Host 可达，受 CORS 同源限制保护）。"""
+        return jsonify(success=True, data={"token": app.config["API_TOKEN"]})
 
     # ========== 页面 ==========
     @app.route("/")
@@ -70,7 +97,7 @@ def create_app() -> Flask:
     @app.route("/api/metrics")
     def api_metrics():
         event = request.args.get("event") or None
-        limit = int(request.args.get("limit", 100))
+        limit = min(request.args.get("limit", 100, type=int) or 100, 1000)
         try:
             data = get_recent(event=event, limit=limit)
             return jsonify(success=True, data=data)
@@ -81,7 +108,7 @@ def create_app() -> Flask:
     @app.route("/api/metrics/summary")
     def api_metrics_summary():
         event = request.args.get("event")
-        limit = int(request.args.get("limit", 100))
+        limit = min(request.args.get("limit", 100, type=int) or 100, 1000)
         if not event:
             return jsonify(success=False, error="缺少 event 参数"), 400
         try:
@@ -112,18 +139,20 @@ def create_app() -> Flask:
             title = content.splitlines()[0][:20]
 
         date_str = datetime.now().strftime("%Y-%m-%d")
-        safe = re.sub(r"[^\w\u4e00-\u9fff-]", "", title).strip("-") or "note"
-        filename = f"{date_str}-{safe}.md"
-        inbox_path = ROOT / "00-Inbox" / filename
+        safe = (re.sub(r"[^\w\u4e00-\u9fff-]", "", title).strip("-") or "note")[:50]
 
-        counter = 1
-        original_path = inbox_path
-        while inbox_path.exists():
-            inbox_path = original_path.with_stem(f"{original_path.stem}-{counter}")
-            counter += 1
-
-        inbox_path.parent.mkdir(parents=True, exist_ok=True)
-        inbox_path.write_text(content + "\n", encoding="utf-8")
+        inbox_dir = ROOT / "00-Inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        counter = 0
+        while True:
+            stem = f"{date_str}-{safe}" + (f"-{counter}" if counter else "")
+            inbox_path = inbox_dir / f"{stem}.md"
+            try:
+                with open(inbox_path, "x", encoding="utf-8") as f:
+                    f.write(content + "\n")
+                break
+            except FileExistsError:
+                counter += 1
         return jsonify(success=True, path=str(inbox_path.relative_to(ROOT)))
 
     # ========== 笔记工作台 ==========
@@ -136,11 +165,20 @@ def create_app() -> Flask:
         if not rel_path:
             return None
         candidate = (ROOT / rel_path).resolve()
+        root_resolved = ROOT.resolve()
         try:
-            candidate.relative_to(ROOT.resolve())
+            candidate.relative_to(root_resolved)
         except ValueError:
             return None
-        if not any(str(candidate).startswith(str((ROOT / d).resolve())) for d in _NOTE_DIRS):
+        in_note_dirs = False
+        for d in _NOTE_DIRS:
+            try:
+                candidate.relative_to(root_resolved / d)
+                in_note_dirs = True
+                break
+            except ValueError:
+                continue
+        if not in_note_dirs:
             return None
         if candidate.suffix.lower() != ".md":
             return None
@@ -214,19 +252,26 @@ def create_app() -> Flask:
                 p = _resolve_note_path(rel)
                 if not p:
                     return jsonify(success=False, error="非法的笔记路径"), 400
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content.rstrip("\n") + "\n", encoding="utf-8")
             else:
                 if not title:
                     first = next((l.strip() for l in content.splitlines() if l.strip()), "")
                     title = first[:20] or "未命名笔记"
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                safe = re.sub(r"[^\w\u4e00-\u9fff-]", "", title).strip("-") or "note"
-                p = ROOT / "00-Inbox" / f"{date_str}-{safe}.md"
-                counter = 1
-                while p.exists():
-                    p = ROOT / "00-Inbox" / f"{date_str}-{safe}-{counter}.md"
-                    counter += 1
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content.rstrip("\n") + "\n", encoding="utf-8")
+                safe = (re.sub(r"[^\w\u4e00-\u9fff-]", "", title).strip("-") or "note")[:50]
+                inbox_dir = ROOT / "00-Inbox"
+                inbox_dir.mkdir(parents=True, exist_ok=True)
+                counter = 0
+                while True:
+                    stem = f"{date_str}-{safe}" + (f"-{counter}" if counter else "")
+                    p = inbox_dir / f"{stem}.md"
+                    try:
+                        with open(p, "x", encoding="utf-8") as f:
+                            f.write(content.rstrip("\n") + "\n")
+                        break
+                    except FileExistsError:
+                        counter += 1
             return jsonify(success=True, message="笔记已保存",
                            path=str(p.relative_to(ROOT)).replace("\\", "/"))
         except Exception as e:
@@ -366,7 +411,7 @@ def create_app() -> Flask:
     def api_search():
         q = (request.args.get("q") or "").strip()
         entity_type = request.args.get("type") or None
-        top_k = int(request.args.get("top_k", 10))
+        top_k = min(request.args.get("top_k", 10, type=int) or 10, 1000)
         if not q:
             return jsonify(success=False, error="缺少关键词"), 400
         try:
@@ -416,37 +461,51 @@ def create_app() -> Flask:
         data = request.get_json() or {}
         q = (data.get("q") or "").strip()
         entity_type = data.get("type") or None
+        use_rag = data.get("use_rag", True)
         session_id = (data.get("session_id") or "default").strip()
         if not q:
             return jsonify(success=False, error="问题不能为空"), 400
 
         def generate():
-            from pewm.processors.rag import rag_answer_stream
-            cfg = load_config()
-            api_key = cfg.get("api_key")
-            provider = cfg.get("provider")
-            model = cfg.get("model")
-            history = get_conversation_history(session_id, limit=10)
-
             full_answer = ""
-            for chunk in rag_answer_stream(
-                query=q,
-                entity_type=entity_type or None,
-                top_k=5,
-                api_key=api_key,
-                provider=provider,
-                model=model,
-                history=history,
-            ):
-                delta = chunk.get("delta", "")
-                full_answer += delta
-                import json
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-            # 保存对话历史
-            add_conversation_message(session_id, "user", q)
-            add_conversation_message(session_id, "assistant", full_answer)
+            try:
+                from pewm.processors.rag import rag_answer_stream
+                cfg = load_config()
+                api_key = cfg.get("api_key") if use_rag else None
+                provider = cfg.get("provider") if use_rag else None
+                model = cfg.get("model") if use_rag else None
+                history = get_conversation_history(session_id, limit=10)
 
-        return Response(generate(), mimetype="text/event-stream")
+                for chunk in rag_answer_stream(
+                    query=q,
+                    entity_type=entity_type or None,
+                    top_k=5,
+                    api_key=api_key,
+                    provider=provider,
+                    model=model,
+                    history=history,
+                ):
+                    delta = chunk.get("delta", "")
+                    full_answer += delta
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                logger.exception("流式对话失败")
+                err = {"delta": "", "done": True, "mode": "error", "error": str(e)}
+                yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+            finally:
+                # 断连/异常也把已生成的部分落库
+                try:
+                    add_conversation_message(session_id, "user", q)
+                    if full_answer:
+                        add_conversation_message(session_id, "assistant", full_answer)
+                except Exception:
+                    logger.exception("保存流式对话历史失败")
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.route("/api/chat/history")
     def api_chat_history():
@@ -482,37 +541,35 @@ def create_app() -> Flask:
 
     @app.route("/api/pipeline/run", methods=["POST"])
     def api_pipeline_run():
-        if _pipeline_lock.locked():
-            return jsonify(success=False, error="本体生成正在运行中"), 409
-        with _pipeline_lock:
-            _pipeline_logs["running"] = True
-            _pipeline_logs["output"] = ""
         data = request.get_json() or {}
         options = data.get("options", ["--no-git", "--no-ocr"])
+        if not _pipeline_lock.acquire(blocking=False):
+            return jsonify(success=False, error="本体生成正在运行中"), 409
+        _pipeline_logs["running"] = True
+        _pipeline_logs["output"] = ""
 
         def task():
-            old_stdout = sys.stdout
             buffer = io.StringIO()
-            sys.stdout = buffer
             try:
                 # 直接调用本体生成函数，避免依赖磁盘上的 run.py（打包后不存在）
                 from pewm.processors.__main__ import run_pipeline as do_run
-                do_run(
-                    reset="--reset" in options,
-                    skip_errors="--skip-errors" in options,
-                    no_git="--no-git" in options,
-                    no_vector="--no-vector" in options,
-                    no_ocr="--no-ocr" in options,
-                )
+                with contextlib.redirect_stdout(buffer):
+                    do_run(
+                        reset="--reset" in options,
+                        skip_errors="--skip-errors" in options,
+                        no_git="--no-git" in options,
+                        no_vector="--no-vector" in options,
+                        no_ocr="--no-ocr" in options,
+                    )
                 output = buffer.getvalue()
             except Exception as e:
                 logger.exception("本体生成运行失败")
                 output = f"本体生成运行失败：{e}\n"
             finally:
-                sys.stdout = old_stdout
-            _pipeline_logs["output"] += output
-            _pipeline_logs["running"] = False
-            invalidate_search_cache()
+                _pipeline_logs["output"] += output
+                _pipeline_logs["running"] = False
+                invalidate_search_cache()
+                _pipeline_lock.release()
 
         threading.Thread(target=task, daemon=True).start()
         return jsonify(success=True, message="本体生成已启动")
@@ -551,6 +608,10 @@ def create_app() -> Flask:
     # ========== OCR 批量 ==========
     @app.route("/api/ocr/run", methods=["POST"])
     def api_ocr_run():
+        if not _pipeline_lock.acquire(blocking=False):
+            return jsonify(success=False, error="有任务正在运行中"), 409
+        _pipeline_logs["running"] = True
+
         def task():
             try:
                 from pewm.processors.ocr import list_media_files, process_all_media
@@ -564,6 +625,9 @@ def create_app() -> Flask:
             except Exception as e:
                 logger.exception("批量 OCR 失败")
                 _pipeline_logs["output"] += f"批量 OCR 失败：{e}\n"
+            finally:
+                _pipeline_logs["running"] = False
+                _pipeline_lock.release()
 
         threading.Thread(target=task, daemon=True).start()
         return jsonify(success=True, message="OCR 已启动")
@@ -571,44 +635,61 @@ def create_app() -> Flask:
     # ========== 向量索引 ==========
     @app.route("/api/vector/rebuild", methods=["POST"])
     def api_vector_rebuild():
+        if not _pipeline_lock.acquire(blocking=False):
+            return jsonify(success=False, error="有任务正在运行中"), 409
+        _pipeline_logs["running"] = True
+
         def task():
-            old_stdout = sys.stdout
             buffer = io.StringIO()
-            sys.stdout = buffer
             try:
                 from pewm.processors.vector_db import VectorDB
                 from pewm.processors.vectorizer import rebuild_vector as do_rebuild
                 init_db()
                 vdb = VectorDB()
                 vdb.ensure_loaded()
-                do_rebuild()
+                with contextlib.redirect_stdout(buffer):
+                    do_rebuild()
                 output = buffer.getvalue()
             except Exception as e:
                 logger.exception("向量索引重建失败")
                 output = f"向量索引重建失败：{e}\n"
             finally:
-                sys.stdout = old_stdout
-            invalidate_search_cache()
-            _pipeline_logs["output"] += output + "\n向量索引重建完成。\n"
+                invalidate_search_cache()
+                _pipeline_logs["output"] += output + "\n向量索引重建完成。\n"
+                _pipeline_logs["running"] = False
+                _pipeline_lock.release()
 
         threading.Thread(target=task, daemon=True).start()
         return jsonify(success=True, message="向量索引重建已启动")
 
     # ========== 配置：LLM ==========
+    def _mask_api_key(key: str) -> str:
+        """API Key 打码：仅返回尾 4 位。"""
+        if not key:
+            return ""
+        return "***" + key[-4:]
+
     @app.route("/api/config/llm")
     def api_config_llm():
-        return jsonify(success=True, data=load_config())
+        cfg = load_config()
+        if cfg.get("api_key"):
+            cfg["api_key"] = _mask_api_key(cfg["api_key"])
+        return jsonify(success=True, data=cfg)
 
     @app.route("/api/config/llm", methods=["POST"])
     def api_config_llm_save():
         data = request.get_json() or {}
+        old = load_config()
+        new_key = (data.get("api_key") or "").strip()
+        # 打码值或空值表示不修改原 key
+        if not new_key or new_key.startswith("***"):
+            new_key = old.get("api_key", "")
         cfg = {
             "provider": (data.get("provider") or "").strip(),
-            "api_key": (data.get("api_key") or "").strip(),
+            "api_key": new_key,
             "base_url": (data.get("base_url") or "").strip(),
             "model": (data.get("model") or "").strip(),
         }
-        old = load_config()
         if "ocr" in old:
             cfg["ocr"] = old["ocr"]
         save_config(cfg)
@@ -620,6 +701,9 @@ def create_app() -> Flask:
         provider = (data.get("provider") or "").strip()
         api_key = (data.get("api_key") or "").strip()
         base_url = (data.get("base_url") or "").strip() or None
+        # 前端回填的可能是打码值，此时使用已保存的 key 测试
+        if api_key.startswith("***"):
+            api_key = load_config().get("api_key", "")
         if not provider or not api_key:
             return jsonify(success=False, error="请先选择提供商并填写 API Key"), 400
         try:
@@ -641,10 +725,19 @@ def create_app() -> Flask:
     @app.route("/api/config/ocr", methods=["POST"])
     def api_config_ocr_save():
         data = request.get_json() or {}
+        mode = data.get("mode", "local")
+        if mode not in ("local", "api"):
+            return jsonify(success=False, error="非法的 OCR 模式"), 400
+        provider = data.get("provider", "baidu")
+        if provider not in OCR_PROVIDERS:
+            return jsonify(success=False, error="非法的 OCR 提供商"), 400
+        credentials = data.get("credentials", {})
+        if not isinstance(credentials, dict):
+            return jsonify(success=False, error="credentials 必须是对象"), 400
         ocr_cfg = {
-            "mode": data.get("mode", "api"),
-            "provider": data.get("provider", "baidu"),
-            "credentials": data.get("credentials", {}),
+            "mode": mode,
+            "provider": provider,
+            "credentials": credentials,
         }
         save_ocr_config(ocr_cfg)
         return jsonify(success=True, message="OCR 配置已保存")
@@ -692,31 +785,48 @@ def create_app() -> Flask:
         return jsonify(success=True, data=PROMPT_FIELDS)
 
     # ========== 配置：导入/导出/备份 ==========
+    def _resolve_user_path(raw: str) -> Optional[Path]:
+        """把用户输入的路径限制在用户目录下，拒绝 .. 穿越，越界返回 None。"""
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        try:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = Path.home() / candidate
+            resolved = candidate.resolve()
+            resolved.relative_to(Path.home().resolve())
+        except (ValueError, OSError):
+            return None
+        return resolved
+
     @app.route("/api/config/export", methods=["POST"])
     def api_config_export():
         data = request.get_json() or {}
-        path = (data.get("path") or "").strip()
+        path = _resolve_user_path(data.get("path"))
         if not path:
-            return jsonify(success=False, error="缺少导出路径"), 400
-        ok, msg = export_all(Path(path), include_api_keys=True)
+            return jsonify(success=False, error="导出路径无效：必须位于用户目录下"), 400
+        include_api_keys = bool(data.get("include_api_keys", False))
+        ok, msg = export_all(path, include_api_keys=include_api_keys)
         return jsonify(success=ok, message=msg)
 
     @app.route("/api/config/import", methods=["POST"])
     def api_config_import():
         data = request.get_json() or {}
-        path = (data.get("path") or "").strip()
+        path = _resolve_user_path(data.get("path"))
         if not path:
-            return jsonify(success=False, error="缺少导入路径"), 400
-        ok, msg = import_from(Path(path), overwrite=True)
+            return jsonify(success=False, error="导入路径无效：必须位于用户目录下"), 400
+        overwrite = bool(data.get("overwrite", False))
+        ok, msg = import_from(path, overwrite=overwrite)
         return jsonify(success=ok, message=msg)
 
     @app.route("/api/config/backup", methods=["POST"])
     def api_config_backup():
         data = request.get_json() or {}
-        path = (data.get("path") or "").strip()
+        path = _resolve_user_path(data.get("path"))
         if not path:
-            return jsonify(success=False, error="缺少备份目录"), 400
-        ok, msg = backup_to_dir(Path(path))
+            return jsonify(success=False, error="备份路径无效：必须位于用户目录下"), 400
+        ok, msg = backup_to_dir(path)
         return jsonify(success=ok, message=msg)
 
     @app.route("/api/environment/status")

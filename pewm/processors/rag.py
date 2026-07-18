@@ -22,13 +22,17 @@ def _collect_context(
     query: str,
     entity_type: Optional[str] = None,
     top_k: int = 5,
-) -> List[Dict]:
-    """使用 RRF 融合的混合检索收集上下文。"""
+):
+    """使用 RRF 融合的混合检索收集上下文。
+
+    返回 (results, error)：检索异常时 results 为 []、error 为错误信息，
+    由调用方以 mode='retrieval_error' 明示上层，而不是伪装成空库。
+    """
     try:
-        return hybrid_search(query, entity_type=entity_type, top_k=top_k, vec_k=top_k * 2)
+        return hybrid_search(query, entity_type=entity_type, top_k=top_k, vec_k=top_k * 2), None
     except Exception as e:
         logger.warning("混合检索失败: %s", e)
-        return []
+        return [], str(e)
 
 
 def _allocate_context_budget(results: List[Dict], total_budget: int) -> List[Dict]:
@@ -101,7 +105,13 @@ def rag_answer(
     history: List[Dict] = None,
 ) -> Dict:
     """RAG 问答入口，返回 {"answer": str, "sources": [...], "mode": str}。"""
-    context = _collect_context(query, entity_type=entity_type, top_k=top_k)
+    context, retrieval_error = _collect_context(query, entity_type=entity_type, top_k=top_k)
+    if retrieval_error is not None:
+        return {
+            "answer": f"检索失败：{retrieval_error}",
+            "sources": [],
+            "mode": "retrieval_error",
+        }
     messages = _build_messages(query, context, history=history)
 
     cfg = load_config()
@@ -160,7 +170,15 @@ def rag_answer_stream(
     history: List[Dict] = None,
 ) -> Iterator[Dict]:
     """RAG 问答流式入口，逐段返回 {"delta": str, "sources": [...], "mode": str, "done": bool}。"""
-    context = _collect_context(query, entity_type=entity_type, top_k=top_k)
+    context, retrieval_error = _collect_context(query, entity_type=entity_type, top_k=top_k)
+    if retrieval_error is not None:
+        yield {
+            "delta": f"检索失败：{retrieval_error}",
+            "sources": [],
+            "mode": "retrieval_error",
+            "done": True,
+        }
+        return
     messages = _build_messages(query, context, history=history)
 
     cfg = load_config()

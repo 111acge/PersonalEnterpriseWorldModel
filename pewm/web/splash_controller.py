@@ -56,6 +56,8 @@ class SplashController:
         self._phase_results: dict = {}
         self._maximized = False
         self._minimized = False
+        # retry 时若 Flask 线程仍存活则复用，跳过重新启动
+        self._skip_flask_start = False
 
     def set_window(self, window):
         self._window = window
@@ -108,8 +110,13 @@ class SplashController:
             if self._stop_event.is_set():
                 return
 
-            self._update(60, "正在启动本地服务...")
-            self._phase_start_flask()
+            if self._skip_flask_start and self._flask_thread and self._flask_thread.is_alive():
+                logger.info("复用已运行的 Flask 服务（端口 %s）", self._flask_port)
+                self._update(60, "复用已运行的本地服务...")
+            else:
+                self._skip_flask_start = False
+                self._update(60, "正在启动本地服务...")
+                self._phase_start_flask()
 
             if self._stop_event.is_set():
                 return
@@ -253,10 +260,11 @@ class SplashController:
         }
 
     def retry(self):
-        """重试初始化。"""
+        """重试初始化。若 Flask 线程仍存活则复用，不再重复启动。"""
         with self._lock:
             self.state = SplashState(version=self.state.version)
             self.state.start_time = time.time()
+        self._skip_flask_start = bool(self._flask_thread and self._flask_thread.is_alive())
         self.start()
         return {"success": True}
 

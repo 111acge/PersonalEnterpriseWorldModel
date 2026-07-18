@@ -99,7 +99,7 @@ def _write_crash_log(report: Dict[str, Any]) -> Path:
     with _LOCK:
         _cleanup_old_logs()
         crash_dir = _crash_dir()
-        filename = f"crash-{datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')}.log"
+        filename = f"crash-{datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S-%f')}.log"
         base_path = crash_dir / filename
         path = _rotate_if_needed(base_path)
 
@@ -135,9 +135,15 @@ def handle_crash(exc_type, exc_value, exc_tb) -> None:
         sys.stderr.write(f"原始异常：{report.get('exc_type')}：{report.get('exc_message')}\n")
 
 
+def _thread_excepthook(args) -> None:
+    """threading.excepthook 适配：子线程未捕获异常同样写崩溃日志。"""
+    handle_crash(args.exc_type, args.exc_value, args.exc_traceback)
+
+
 def install_crash_handler() -> None:
-    """安装全局未捕获异常处理器。"""
+    """安装全局未捕获异常处理器（主线程 + 子线程）。"""
     sys.excepthook = handle_crash
+    threading.excepthook = _thread_excepthook
 
 
 def get_recent_crash_logs(limit: int = 10) -> List[str]:

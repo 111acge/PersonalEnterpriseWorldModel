@@ -2,6 +2,7 @@
 
 所有数据保存在项目根目录的 data/world-model.db 中。
 """
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -33,6 +34,15 @@ def db_connection():
     if conn is None:
         conn = sqlite3.connect(str(paths.DB_PATH))
         conn.row_factory = sqlite3.Row
+        # WAL 提升并发读写能力；busy_timeout 避免瞬时写锁直接报错
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass  # 内存库等场景不支持 WAL
+        try:
+            conn.execute("PRAGMA busy_timeout=10000")
+        except sqlite3.OperationalError:
+            pass
         _thread_local.conn = conn
     try:
         yield conn
@@ -48,6 +58,15 @@ def close_connection() -> None:
     if conn is not None:
         conn.close()
         _thread_local.conn = None
+
+
+def _notify_search_changed() -> None:
+    """写操作后通知检索层使查询缓存失效（延迟 import 避免循环依赖）。"""
+    try:
+        from pewm.processors.retrieval import invalidate_search_cache
+        invalidate_search_cache()
+    except Exception:
+        pass
 
 
 def _to_rel(path: str) -> str:
@@ -193,10 +212,12 @@ def add_document(entity_type: str, title: str, content: str, source: str, path: 
             (entity_type, title, content, _to_rel(source), _to_rel(path), now_iso()),
         )
         conn.commit()
+    _notify_search_changed()
 
 
 def soft_delete_document(path: str) -> bool:
-    """软删除：标记 deleted_at 为当前时间，从 FTS 索引中移除，但保留原文档。"""
+    """软删除：仅标记 deleted_at。FTS 索引保留（检索 SQL 已过滤 deleted_at），
+    避免与 AFTER DELETE 触发器重复删除导致 FTS5 损坏。"""
     with db_connection() as conn:
         row = conn.execute(
             "SELECT id FROM documents WHERE path = ? AND (deleted_at IS NULL OR deleted_at = '')",
@@ -209,17 +230,13 @@ def soft_delete_document(path: str) -> bool:
             "UPDATE documents SET deleted_at = ? WHERE id = ?",
             (ts, row["id"]),
         )
-        conn.execute(
-            "INSERT INTO fts_documents(fts_documents, rowid, title, content) "
-            "SELECT 'delete', id, title, content FROM documents WHERE id = ?",
-            (row["id"],),
-        )
         conn.commit()
+        _notify_search_changed()
         return True
 
 
 def restore_document(path: str) -> bool:
-    """恢复软删除的文档：把 deleted_at 置空，UPDATE 触发器会自动同步 FTS 索引。"""
+    """恢复软删除的文档：把 deleted_at 置空。FTS 索引一直保留，恢复后即可命中。"""
     with db_connection() as conn:
         row = conn.execute(
             "SELECT id FROM documents WHERE path = ? AND deleted_at != ''",
@@ -232,6 +249,7 @@ def restore_document(path: str) -> bool:
             (row["id"],),
         )
         conn.commit()
+        _notify_search_changed()
         return True
 
 
@@ -240,7 +258,22 @@ def hard_delete_document(path: str) -> bool:
     with db_connection() as conn:
         cur = conn.execute("DELETE FROM documents WHERE path = ?", (_to_rel(path),))
         conn.commit()
+        if cur.rowcount > 0:
+            _notify_search_changed()
         return cur.rowcount > 0
+
+
+def rebuild_fts() -> None:
+    """重建 FTS5 索引（一次性维护函数）。
+
+    用于修复存量库中 FTS 与 documents 表不一致的问题（例如旧版软删手动清 FTS
+    导致的 "database disk image is malformed"）。
+    """
+    with db_connection() as conn:
+        conn.execute("INSERT INTO fts_documents(fts_documents) VALUES('rebuild')")
+        conn.commit()
+    logger.info("FTS5 索引已重建。")
+    _notify_search_changed()
 
 
 def list_documents(include_deleted: bool = False,
@@ -281,33 +314,49 @@ def search_documents(query: str, entity_type: Optional[str] = None,
     like_results = _search_like(query, entity_type, limit)
     like_ids = {r["id"] for r in like_results}
 
-    try:
-        safe_query = " ".join(query.split())
-        if safe_query:
-            sql = """
-                SELECT d.id, d.entity_type, d.title, d.content, d.source, d.path, d.updated_at
-                FROM fts_documents f
-                JOIN documents d ON d.id = f.rowid
-                WHERE fts_documents MATCH ? AND (d.deleted_at IS NULL OR d.deleted_at = '')
-            """
-            params = [safe_query]
-            if entity_type:
-                sql += " AND d.entity_type = ?"
-                params.append(entity_type)
-            sql += " LIMIT ?"
-            params.append(limit)
-
-            with db_connection() as conn:
-                rows = conn.execute(sql, params).fetchall()
-                for row in rows:
-                    row_dict = dict(row)
-                    if row_dict["id"] not in like_ids:
-                        like_results.append(row_dict)
-                        like_ids.add(row_dict["id"])
-    except sqlite3.OperationalError:
-        pass
+    for row_dict in _search_fts(query, entity_type, limit):
+        if row_dict["id"] not in like_ids:
+            like_results.append(row_dict)
+            like_ids.add(row_dict["id"])
 
     return like_results[:limit]
+
+
+def _search_fts(query: str, entity_type: Optional[str], limit: int) -> List[Dict]:
+    """FTS5 检索：查询分词后逐词双引号包裹防注入，返回带 bm25 score 的结果。"""
+    terms = []
+    for t in query.split():
+        # 双引号包裹词元做精确短语匹配，内部引号替换为空格防止 MATCH 语法注入
+        t = t.replace('"', " ").strip()
+        # 不含任何文字字符的词元无法匹配，丢弃避免空短语语法错误
+        if t and re.search(r"\w", t):
+            terms.append(t)
+    if not terms:
+        return []
+    safe_query = " ".join(f'"{t}"' for t in terms)
+
+    sql = """
+        SELECT d.id, d.entity_type, d.title, d.content, d.source, d.path, d.updated_at,
+               bm25(fts_documents) AS score
+        FROM fts_documents f
+        JOIN documents d ON d.id = f.rowid
+        WHERE fts_documents MATCH ? AND (d.deleted_at IS NULL OR d.deleted_at = '')
+    """
+    params = [safe_query]
+    if entity_type:
+        sql += " AND d.entity_type = ?"
+        params.append(entity_type)
+    # bm25 值越小越相关
+    sql += " ORDER BY score LIMIT ?"
+    params.append(limit)
+
+    try:
+        with db_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.OperationalError as e:
+        logger.warning("FTS5 检索失败（已跳过）：%s", e)
+        return []
 
 
 def _search_like(query: str, entity_type: Optional[str], limit: int) -> List[Dict]:
@@ -319,10 +368,13 @@ def _search_like(query: str, entity_type: Optional[str], limit: int) -> List[Dic
         clean_query = query.replace(" ", "").strip()
         if len(clean_query) >= 2:
             search_terms.add(clean_query)
-        for part in list(search_terms):
-            if len(part) >= 3:
-                for i in range(len(part) - 1):
-                    search_terms.add(part[i:i+2])
+        # 2-gram 展开仅针对前 20 个词元，避免长查询产生过多 LIKE 条件
+        expand_sources = [p for p in parts if len(p) >= 3]
+        if len(clean_query) >= 3:
+            expand_sources.append(clean_query)
+        for part in expand_sources[:20]:
+            for i in range(len(part) - 1):
+                search_terms.add(part[i:i+2])
 
         search_terms = [t for t in search_terms if len(t) >= 2]
         if not search_terms:
@@ -342,7 +394,7 @@ def _search_like(query: str, entity_type: Optional[str], limit: int) -> List[Dic
         if entity_type:
             sql += " AND entity_type = ?"
             params.append(entity_type)
-        sql += " LIMIT ?"
+        sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(limit)
 
         rows = conn.execute(sql, params).fetchall()

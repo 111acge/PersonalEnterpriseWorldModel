@@ -32,6 +32,8 @@ class InboxHandler(FileSystemEventHandler):
         self.debounce_seconds = debounce_seconds
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
+        self._pipeline_running = False
+        self._pending_rerun = False
 
     def on_any_event(self, event):
         if event.is_directory:
@@ -45,8 +47,31 @@ class InboxHandler(FileSystemEventHandler):
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = threading.Timer(self.debounce_seconds, self.callback)
+            self._timer = threading.Timer(self.debounce_seconds, self._run_callback)
             self._timer.start()
+
+    def _run_callback(self):
+        """执行回调，带重入保护。
+
+        管线运行期间到达的触发只置 _pending_rerun 标记；
+        当前运行结束后若标记存在则补跑一次。
+        """
+        with self._lock:
+            if self._pipeline_running:
+                self._pending_rerun = True
+                return
+            self._pipeline_running = True
+        try:
+            while True:
+                self.callback()
+                with self._lock:
+                    if not self._pending_rerun:
+                        return
+                    self._pending_rerun = False
+                logger.info("管线运行期间收到新变更，补跑一次。")
+        finally:
+            with self._lock:
+                self._pipeline_running = False
 
 
 class PipelineWatcher:
@@ -94,9 +119,14 @@ class PipelineWatcher:
         return True
 
     def stop(self):
-        """停止监听。"""
+        """停止监听。先持锁取消待触发的防抖定时器，再停 observer。"""
         if not self._running:
             return False
+        if self.handler is not None:
+            with self.handler._lock:
+                if self.handler._timer is not None:
+                    self.handler._timer.cancel()
+                    self.handler._timer = None
         if self.observer:
             self.observer.stop()
             self.observer.join()

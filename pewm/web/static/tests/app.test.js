@@ -134,6 +134,32 @@ describe('escapeHtml', () => {
       '&lt;script&gt;alert(1)&lt;/script&gt;'
     );
   });
+
+  it('转义双引号和单引号（防属性注入 XSS）', () => {
+    const app = loadApp();
+    expect(app.escapeHtml(`" onmouseover="alert(1)'`)).toBe(
+      '&quot; onmouseover=&quot;alert(1)&#39;'
+    );
+  });
+});
+
+// ========== renderMarkdown 链接协议白名单 ==========
+describe('renderMarkdown 链接安全', () => {
+  beforeEach(setupDOM);
+
+  it('http/https/mailto 链接正常渲染', () => {
+    const app = loadApp();
+    const html = app.renderMarkdown('[站点](https://example.com) 和 [邮件](mailto:a@b.com)');
+    expect(html).toContain('<a href="https://example.com"');
+    expect(html).toContain('<a href="mailto:a@b.com"');
+  });
+
+  it('非法协议（javascript:）降级为纯文本', () => {
+    const app = loadApp();
+    const html = app.renderMarkdown('[点我](javascript:alert(1))');
+    expect(html).not.toContain('javascript:');
+    expect(html).not.toContain('<a href');
+  });
 });
 
 // ========== getChatSessionId ==========

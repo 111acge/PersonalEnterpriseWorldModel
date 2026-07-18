@@ -90,6 +90,47 @@ def test_ocr_for_inbox_file_finds_related_media(temp_project):
     assert "hello" in result
 
 
+def test_ocr_for_inbox_file_ignores_same_date_prefix(temp_project):
+    """#65：仅日期前缀相同的图片不应被吞进当天笔记。"""
+    _cleanup_media()
+    ocr.INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    ocr.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    (ocr.INBOX_DIR / "2026-07-15-note.md").write_text("note", encoding="utf-8")
+    # 日期前缀相同但 stem 不同，收紧后不应匹配
+    (ocr.MEDIA_DIR / "2026-07-15-other.png").write_bytes(b"fake")
+    with patch("pewm.processors.ocr.ocr_image", return_value="hello") as m:
+        result = ocr_for_inbox_file(ocr.INBOX_DIR / "2026-07-15-note.md")
+    assert result == ""
+    m.assert_not_called()
+
+
+def test_ocr_for_inbox_file_failure_placeholder_has_no_detail(temp_project):
+    """#66：OCR 失败占位文本不含异常详情。"""
+    _cleanup_media()
+    ocr.INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    ocr.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    (ocr.INBOX_DIR / "note.md").write_text("note", encoding="utf-8")
+    (ocr.MEDIA_DIR / "note-fig1.png").write_bytes(b"fake")
+    with patch("pewm.processors.ocr.ocr_image",
+               side_effect=RuntimeError("sensitive internal detail")):
+        result = ocr_for_inbox_file(ocr.INBOX_DIR / "note.md")
+    assert "识别失败" in result
+    assert "sensitive internal detail" not in result
+
+
+def test_process_all_media_failure_placeholder_has_no_detail(temp_project):
+    """#66：process_all_media 失败占位文本不含异常详情。"""
+    _cleanup_media()
+    ocr.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    img = ocr.MEDIA_DIR / "a.png"
+    img.write_bytes(b"fake")
+    with patch("pewm.processors.ocr.ocr_image",
+               side_effect=RuntimeError("sensitive internal detail")):
+        results = process_all_media()
+    assert "识别失败" in results[img]
+    assert "sensitive internal detail" not in results[img]
+
+
 def test_process_all_media_with_callback(temp_project):
     _cleanup_media()
     ocr.MEDIA_DIR.mkdir(parents=True, exist_ok=True)

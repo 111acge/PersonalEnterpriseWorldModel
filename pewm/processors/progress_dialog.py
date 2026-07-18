@@ -78,7 +78,11 @@ class ProgressDialog(tk.Toplevel):
                 self.progress["value"] = current
                 pct = int(current / self.total * 100) if self.total > 0 else 0
                 self.percent_var.set(f"{pct}% ({current}/{self.total})")
-        self.after(0, _do)
+        try:
+            self.after(0, _do)
+        except tk.TclError:
+            # 窗口已被销毁，忽略后续进度更新
+            pass
 
     def finish(self, final_message: str = "完成"):
         """标记完成，自动关闭。"""
@@ -92,7 +96,10 @@ class ProgressDialog(tk.Toplevel):
             self.update_idletasks()
             # 短暂延迟后关闭，让用户能看到"完成"
             self.after(800, self.destroy)
-        self.after(0, _do)
+        try:
+            self.after(0, _do)
+        except tk.TclError:
+            pass
 
     def cancel(self):
         """取消操作。"""
@@ -118,12 +125,18 @@ def run_with_progress(parent, title: str, task_fn: Callable,
     dlg = ProgressDialog(parent, title, total=0)
 
     def _progress(current, total, message=""):
-        if dlg.total != total and total > 0:
-            # 第一次知道总进度时切换为 determinate
-            dlg.total = total
-            dlg.progress.stop()
-            dlg.progress.config(mode="determinate", maximum=total)
-        dlg.update(current, message)
+        def _do():
+            if dlg.total != total and total > 0:
+                # 第一次知道总进度时切换为 determinate
+                dlg.total = total
+                dlg.progress.stop()
+                dlg.progress.config(mode="determinate", maximum=total)
+            dlg.update(current, message)
+        try:
+            dlg.after(0, _do)
+        except tk.TclError:
+            # 窗口已被销毁，忽略后续进度更新
+            pass
 
     def _is_cancelled():
         return dlg.is_cancelled()
